@@ -1,0 +1,68 @@
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+import datetime
+
+def load_certificate(file_path):
+    with open(file_path, "rb") as f:
+        cert_data = f.read()
+    return x509.load_pem_x509_certificate(cert_data, default_backend())
+
+def is_certificate_valid(cert):
+    current_time = datetime.datetime.utcnow()
+    return cert.not_valid_before <= current_time <= cert.not_valid_after
+
+def is_root_certificate_valid(root_cert):
+    try:
+        if not is_certificate_valid(root_cert):
+            print("El certificado root ha expirado o aún no es válido.")
+            return False
+
+        # Verificar que el certificado root es auto-firmado
+        root_cert.public_key().verify(
+            root_cert.signature,
+            root_cert.tbs_certificate_bytes,
+            padding.PKCS1v15(),
+            root_cert.signature_hash_algorithm,
+        )
+        print("El certificado root es auto-firmado correctamente.")
+        return True
+    except Exception as e:
+        print(f"Error verificando el certificado root: {e}")
+        return False
+
+def verify_certificate(cert, root_cert):
+    try:
+        if not is_certificate_valid(cert):
+            print("El certificado ha expirado o aún no es válido.")
+            return False
+
+        # Verificar la firma del certificado
+        root_cert.public_key().verify(
+            cert.signature,
+            cert.tbs_certificate_bytes,
+            padding.PKCS1v15(),
+            cert.signature_hash_algorithm,
+        )
+        return True
+    except Exception as e:
+        print(f"Error verificando el certificado: {e}")
+        return False
+
+# Cargar los certificados
+cert_path = "ruta/al/certificado.pem"
+root_cert_path = "ruta/al/certificado_root.pem"
+cert = load_certificate(cert_path)
+root_cert = load_certificate(root_cert_path)
+
+# Verificar el certificado root
+if is_root_certificate_valid(root_cert):
+    print("El certificado root es válido.")
+    # Verificar el certificado con el root certificate
+    if verify_certificate(cert, root_cert):
+        print("El certificado es válido y está firmado por el certificado root.")
+    else:
+        print("El certificado no es válido o no está firmado por el certificado root.")
+else:
+    print("El certificado root no es válido.")
