@@ -1,0 +1,176 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from itertools import combinations
+
+def create_match_dataframe(df):
+    """
+    Analyzes the match frequency between pairs of records in the DataFrame.
+    
+    Parameters:
+        df (pd.DataFrame): The DataFrame containing the data.
+    
+    Returns:
+        match_df (pd.DataFrame): A DataFrame with columns and their match counts.
+    """
+    # Select columns to analyze (numerical and categorical)
+    columns_to_analyze = df.select_dtypes(include=['number', 'object']).columns
+    
+    # Initialize a dictionary to store match counts per column
+    match_counts = {col: 0 for col in columns_to_analyze}
+    
+    # Create combinations of record pairs
+    record_pairs = combinations(df.index, 2)
+    
+    # Count matches in each column for each pair of records
+    for idx1, idx2 in record_pairs:
+        for col in columns_to_analyze:
+            if df.at[idx1, col] == df.at[idx2, col]:
+                match_counts[col] += 1
+    
+    # Convert the dictionary to a DataFrame and sort by match count
+    match_df = pd.DataFrame.from_dict(match_counts, orient='index', columns=['match_count'])
+    match_df = match_df.sort_values(by='match_count', ascending=False)
+    
+    return match_df
+
+def plot_match_tendencies(match_df, top_n=20):
+    """
+    Generates a bar plot showing the match tendencies in the columns.
+    
+    Parameters:
+        match_df (pd.DataFrame): DataFrame with the columns and their match counts.
+        top_n (int): Number of columns to display in the plot.
+    """
+    # Select the top_n most relevant columns
+    match_df_top = match_df.head(top_n)
+    
+    # Create the bar plot
+    plt.figure(figsize=(10, 6))
+    plt.barh(match_df_top.index[::-1], match_df_top['match_count'][::-1], color='skyblue')
+    
+    # Add labels and title
+    plt.xlabel('Number of Matches')
+    plt.ylabel('Columns')
+    plt.title(f'Trend of Matches in Columns (Top {top_n})')
+    
+    # Show the plot
+    plt.tight_layout()
+    plt.show()
+
+# Load your data (example)
+df = pd.read_csv('historical_tickets.csv')
+
+# Create the match DataFrame
+match_df = create_match_dataframe(df)
+
+# Plot the match tendencies
+plot_match_tendencies(match_df, top_n=20)
+--------------------------------------------------------------------------------------------------
+
+
+import pandas as pd
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
+
+def knn_similarities(df, n_neighbors=5):
+    X = pd.get_dummies(df.select_dtypes(include=[np.number, 'object']))  # Encode categorical variables
+    knn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
+    knn.fit(X)
+    distances, indices = knn.kneighbors(X)
+    
+    similarities = []
+    for i in range(len(X)):
+        for j in range(1, len(indices[i])):  # Skip self
+            similarities.append((i, indices[i][j], distances[i][j]))
+
+    return pd.DataFrame(similarities, columns=['Record A', 'Record B', 'Distance']).sort_values(by='Distance')
+
+
+from sklearn.metrics.pairwise import cosine_similarity
+
+def cosine_similarity_records(df):
+    X = pd.get_dummies(df.select_dtypes(include=[np.number, 'object']))  # Encode categorical variables
+    cos_sim = cosine_similarity(X)
+    
+    similarities = []
+    for i in range(len(X)):
+        for j in range(i+1, len(X)):  # Avoid duplicates and self-comparison
+            similarities.append((i, j, cos_sim[i][j]))
+
+    return pd.DataFrame(similarities, columns=['Record A', 'Record B', 'Cosine Similarity']).sort_values(by='Cosine Similarity', ascending=False)
+
+
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import pdist
+
+def hierarchical_clustering_similarities(df, distance_threshold=1.5):
+    X = pd.get_dummies(df.select_dtypes(include=[np.number, 'object']))  # Encode categorical variables
+    Z = linkage(X, method='ward')
+    clusters = fcluster(Z, t=distance_threshold, criterion='distance')
+    
+    similarities = []
+    for i in range(len(X)):
+        for j in range(i+1, len(X)):
+            if clusters[i] == clusters[j]:
+                similarities.append((i, j, pdist([X.iloc[i], X.iloc[j]])[0]))
+
+    return pd.DataFrame(similarities, columns=['Record A', 'Record B', 'Distance']).sort_values(by='Distance')
+
+
+
+from sklearn.cluster import DBSCAN
+
+def dbscan_similarities(df, eps=0.5, min_samples=5):
+    X = pd.get_dummies(df.select_dtypes(include=[np.number, 'object']))  # Encode categorical variables
+    db = DBSCAN(eps=eps, min_samples=min_samples).fit(X)
+    labels = db.labels_
+    
+    similarities = []
+    for i in range(len(X)):
+        for j in range(i+1, len(X)):
+            if labels[i] == labels[j] and labels[i] != -1:  # Exclude noise
+                similarities.append((i, j, pdist([X.iloc[i], X.iloc[j]])[0]))
+
+    return pd.DataFrame(similarities, columns=['Record A', 'Record B', 'Distance']).sort_values(by='Distance')
+
+
+
+import time
+
+def analyze_performance(df):
+    results = {}
+
+    # KNN
+    start_time = time.time()
+    knn_df = knn_similarities(df)
+    results['KNN'] = time.time() - start_time
+
+    # Cosine Similarity
+    start_time = time.time()
+    cosine_df = cosine_similarity_records(df)
+    results['Cosine Similarity'] = time.time() - start_time
+
+    # Hierarchical Clustering
+    start_time = time.time()
+    hier_df = hierarchical_clustering_similarities(df)
+    results['Hierarchical Clustering'] = time.time() - start_time
+
+    # DBSCAN
+    start_time = time.time()
+    dbscan_df = dbscan_similarities(df)
+    results['DBSCAN'] = time.time() - start_time
+
+    # Display performance
+    for method, duration in results.items():
+        print(f"{method}: {duration:.4f} seconds")
+
+    # Optionally, return the results for further analysis
+    return results, knn_df, cosine_df, hier_df, dbscan_df
+
+# Load your data (example)
+df = pd.read_csv('historical_tickets.csv')
+
+# Analyze the performance of different algorithms
+performance_results, knn_df, cosine_df, hier_df, dbscan_df = analyze_performance(df)
+
+
