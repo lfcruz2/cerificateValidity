@@ -1,3 +1,90 @@
+
+import pandas as pd
+
+def create_rn(df_1):
+    """
+    Adds a unique identifier (RN) to each unique pair of original_id and canceled_id.
+    
+    Parameters:
+        df_1 (pd.DataFrame): DataFrame containing the original and canceled transaction IDs.
+    
+    Returns:
+        df_1 (pd.DataFrame): DataFrame with an added RN column.
+    """
+    # Create a new column RN that assigns a unique identifier to each unique pair
+    df_1['RN'] = df_1.groupby(['original_id', 'canceled_id']).ngroup() + 1
+    return df_1
+
+
+def merge_dataframes(df_1, df_2):
+    """
+    Merges df_1 and df_2 based on the transaction IDs and creates a combined DataFrame
+    with an additional column indicating the record type (original or canceled).
+    
+    Parameters:
+        df_1 (pd.DataFrame): DataFrame containing the original and canceled transaction IDs.
+        df_2 (pd.DataFrame): DataFrame containing all transaction records.
+    
+    Returns:
+        merged_df (pd.DataFrame): DataFrame resulting from merging df_1 and df_2 on transaction IDs,
+                                  with an additional column 'record_type' indicating the record type.
+    """
+    # Merge df_1 with df_2 based on the original transaction ID
+    df_original = pd.merge(df_1, df_2, left_on='original_id', right_on='transaction_id', how='left')
+    df_original['record_type'] = 'original'
+    
+    # Merge again to bring in the canceled transaction information
+    df_canceled = pd.merge(df_1, df_2, left_on='canceled_id', right_on='transaction_id', how='left')
+    df_canceled['record_type'] = 'canceled'
+    
+    # Concatenate the original and canceled DataFrames
+    merged_df = pd.concat([df_original, df_canceled], ignore_index=True, sort=False)
+    
+    return merged_df
+
+
+def find_similarities(df_1, df_2):
+    """
+    Combines the data from df_1 and df_2, then applies create_match_dataframe to find similar columns,
+    with an added 'record_type' column to differentiate between original and canceled records.
+    
+    Parameters:
+        df_1 (pd.DataFrame): DataFrame containing the original and canceled transaction IDs.
+        df_2 (pd.DataFrame): DataFrame containing all transaction records.
+    
+    Returns:
+        match_df (pd.DataFrame): DataFrame with columns and their match counts.
+    """
+    # Step 1: Create the RN in df_1
+    df_1 = create_rn(df_1)
+    
+    # Step 2: Merge df_1 and df_2, with the new 'record_type' column
+    merged_df = merge_dataframes(df_1, df_2)
+    
+    # Step 3: Use create_match_dataframe on the merged DataFrame
+    match_df = create_match_dataframe(merged_df)
+    
+    return match_df
+
+# Example usage
+df_1 = pd.DataFrame({
+    'original_id': [1, 2, 3, 1, 2],
+    'canceled_id': [4, 5, 6, 4, 6]
+})
+
+df_2 = pd.DataFrame({
+    'transaction_id': [1, 2, 3, 4, 5, 6],
+    'amount': [100, 200, 150, 100, 200, 150],
+    'date': ['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-06'],
+    'status': ['completed', 'completed', 'completed', 'canceled', 'canceled', 'canceled']
+})
+
+# Find similarities between related records
+match_df = find_similarities(df_1, df_2)
+print(match_df)
+
+-----------------------------
+
 import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import combinations
