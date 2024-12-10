@@ -108,3 +108,19 @@ flowchart TD
     H --> I[Update lock: is_executing=0, start_time=NULL, executing_instance=NULL]
     I --> J[Return result: Load completed successfully]
     J --> E[End]
+
+
+graph LR
+
+    C[Cliente] -- POST /load/start --> LB[Load Balancer]
+
+    LB --> A1[Instancia Java #1]
+    LB --> A2[Instancia Java #2]
+    LB --> A3[Instancia Java #3]
+    LB --> A4[Instancia Java #4]
+
+    A1 -- JDBC --> DB[(Base de Datos SQL Server)]
+    A2 -- JDBC --> DB
+    A3 -- JDBC --> DB
+    A4 -- JDBC --> DB
+
