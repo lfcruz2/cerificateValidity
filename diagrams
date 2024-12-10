@@ -1,0 +1,110 @@
+
+
+sequenceDiagram
+    participant C1 as Client 1 (API Consumer)
+    participant Ctrl as LoadController
+    participant L as LoadLockService
+    participant R as LoadLockRepository
+    participant DB as Database
+    
+    C1->>Ctrl: POST /load/start
+    Ctrl->>L: acquireLock(processId="load_csv", instance="instanceX")
+    L->>R: findById("load_csv")
+    R->>DB: SELECT * FROM load_lock WHERE process_id = 'load_csv'
+    DB-->>R: Returns lock record (is_executing=false)
+    R-->>L: Lock object returned (not executing)
+    L->>R: UPDATE load_lock SET is_executing=1, start_time=NOW(), executing_instance='instanceX'
+    R->>DB: Execute UPDATE
+    DB-->>R: OK
+    R-->>L: Lock acquired
+    L-->>Ctrl: true (lock acquired)
+    Ctrl->>Ctrl: Start CSV load process (long-running)
+
+
+sequenceDiagram
+    participant C2 as Client 2 (API Consumer)
+    participant Ctrl as LoadController
+    participant L as LoadLockService
+    participant R as LoadLockRepository
+    participant DB as Database
+    
+    C2->>Ctrl: POST /load/start (attempt while ongoing)
+    Ctrl->>L: acquireLock(processId="load_csv", instance="instanceY")
+    L->>R: findById("load_csv")
+    R->>DB: SELECT * FROM load_lock WHERE process_id = 'load_csv'
+    DB-->>R: Returns lock record (is_executing=true)
+    R-->>L: Lock object returned (executing)
+    L-->>Ctrl: false (lock not acquired)
+    Ctrl-->>C2: "Load process is currently running. Please try again later."
+
+
+sequenceDiagram
+    participant C1 as Client 1 (API Consumer)
+    participant Ctrl as LoadController
+    participant L as LoadLockService
+    participant R as LoadLockRepository
+    participant DB as Database
+    
+    Ctrl->>L: releaseLock("load_csv")
+    L->>R: UPDATE load_lock SET is_executing=0, start_time=NULL, executing_instance=NULL
+    R->>DB: Execute UPDATE
+    DB-->>R: OK
+    R-->>L: Lock released
+    L-->>Ctrl: Lock released
+    Ctrl-->>C1: "Load completed successfully!"
+
+
+sequenceDiagram
+    participant C1 as Client 1 (API Consumer)
+    participant C2 as Client 2 (API Consumer)
+    participant Ctrl as LoadController
+    participant L as LoadLockService
+    participant R as LoadLockRepository
+    participant DB as Database
+    
+    C1->>Ctrl: POST /load/start
+    Ctrl->>L: acquireLock(processId="load_csv", instance="instanceX")
+    L->>R: findById("load_csv")
+    R->>DB: SELECT * FROM load_lock WHERE process_id = 'load_csv'
+    DB-->>R: Returns lock record (is_executing=false)
+    R-->>L: Returns lock object
+    L->>R: UPDATE load_lock SET is_executing=1, start_time=NOW(), executing_instance='instanceX'
+    R->>DB: Execute UPDATE
+    DB-->>R: OK
+    R-->>L: Lock acquired
+    L-->>Ctrl: true (lock acquired)
+    Ctrl->>Ctrl: Execute CSV load process (long-running operation)
+
+    %% While the CSV load process is running...
+    C2->>Ctrl: POST /load/start (attempt at mid-process)
+    Ctrl->>L: acquireLock(processId="load_csv", instance="instanceY")
+    L->>R: findById("load_csv")
+    R->>DB: SELECT * FROM load_lock WHERE process_id = 'load_csv'
+    DB-->>R: Returns lock record (is_executing=true)
+    R-->>L: Returns lock object (locked)
+    L-->>Ctrl: false (lock not acquired)
+    Ctrl-->>C2: "Load process is currently running. Please try again later."
+
+    %% Back to the original process once it finishes
+    Ctrl->>L: releaseLock("load_csv")
+    L->>R: UPDATE load_lock SET is_executing=0, start_time=NULL, executing_instance=NULL
+    R->>DB: Execute UPDATE
+    DB-->>R: OK
+    R-->>L: Lock released
+    L-->>Ctrl: Lock released
+    Ctrl-->>C1: "Load completed successfully!"
+
+
+flowchart TD
+
+    A[Start Load Process] --> B[acquireLock processId]
+    B -->|Is Executing?| C{is_executing == true?}
+    C -->|Yes| D[Return message: Process is running]
+    D --> E[End]
+
+    C -->|No| F[Update lock: is_executing=1, start_time=NOW, instance=instanceX]
+    F --> G[Execute CSV load process]
+    G --> H[Upon completion: releaseLock processId ]
+    H --> I[Update lock: is_executing=0, start_time=NULL, executing_instance=NULL]
+    I --> J[Return result: Load completed successfully]
+    J --> E[End]
