@@ -1,0 +1,458 @@
+import javax.persistence.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "process_lock")
+public class ProcessLock {
+
+    @Id
+    @Column(name = "process_id", length = 100, nullable = false)
+    private String processId;
+
+    @Column(name = "is_executing", nullable = false)
+    private boolean executing;
+
+    @Column(name = "start_time")
+    private LocalDateTime startTime;
+
+    @Column(name = "end_time")
+    private LocalDateTime endTime;
+
+    @Column(name = "executing_instance", length = 100)
+    private String executingInstance;
+
+    public ProcessLock() {
+    }
+
+    public ProcessLock(String processId, boolean executing, LocalDateTime startTime, LocalDateTime endTime, String executingInstance) {
+        this.processId = processId;
+        this.executing = executing;
+        this.startTime = startTime;
+        this.endTime = endTime;
+        this.executingInstance = executingInstance;
+    }
+
+    public String getProcessId() {
+        return processId;
+    }
+
+    public void setProcessId(String processId) {
+        this.processId = processId;
+    }
+
+    public boolean isExecuting() {
+        return executing;
+    }
+
+    public void setExecuting(boolean executing) {
+        this.executing = executing;
+    }
+
+    public LocalDateTime getStartTime() {
+        return startTime;
+    }
+
+    public void setStartTime(LocalDateTime startTime) {
+        this.startTime = startTime;
+    }
+
+    public LocalDateTime getEndTime() {
+        return endTime;
+    }
+
+    public void setEndTime(LocalDateTime endTime) {
+        this.endTime = endTime;
+    }
+
+    public String getExecutingInstance() {
+        return executingInstance;
+    }
+
+    public void setExecutingInstance(String executingInstance) {
+        this.executingInstance = executingInstance;
+    }
+}
+
+--------------------------------------------------------------------------------
+CREATE TABLE [dbo].[process_lock] (
+    [process_id]         VARCHAR(100) NOT NULL,
+    [is_executing]       BIT NOT NULL,
+    [start_time]         DATETIME2 NULL,
+    [end_time]           DATETIME2 NULL,
+    [executing_instance] VARCHAR(100) NULL,
+    CONSTRAINT [PK_process_lock] PRIMARY KEY CLUSTERED ([process_id])
+);
+
+-- Ejemplo de inserción inicial (si se desea un registro base)
+INSERT INTO [dbo].[process_lock] (process_id, is_executing, start_time, end_time, executing_instance)
+VALUES ('load_csv', 0, NULL, NULL, NULL);
+
+
+--------------------------------------------------------------------------------
+import org.springframework.stereotype.Component;
+import javax.annotation.PostConstruct;
+import java.util.UUID;
+
+@Component
+public class InstanceIdentifier {
+
+    private String instanceId;
+
+    @PostConstruct
+    public void init() {
+        instanceId = UUID.randomUUID().toString();
+        System.out.println("Generated instance ID: " + instanceId);
+    }
+
+    public String getInstanceId() {
+        return instanceId;
+    }
+}
+
+
+--------------------------------------------------------------------------------
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface ProcessLockRepository extends JpaRepository<ProcessLock, String> {
+    // No se requieren métodos especiales por ahora
+}
+
+--------------------------------------------------------------------------------
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.time.LocalDateTime;
+
+@Service
+public class ProcessLockService {
+
+    private final ProcessLockRepository repository;
+    private final InstanceIdentifier instanceIdentifier;
+
+    public ProcessLockService(ProcessLockRepository repository, InstanceIdentifier instanceIdentifier) {
+        this.repository = repository;
+        this.instanceIdentifier = instanceIdentifier;
+    }
+
+    @Transactional
+    public boolean acquireLock(String processId) {
+        ProcessLock lock = repository.findById(processId)
+            .orElseThrow(() -> new IllegalStateException("No lock configuration found for process " + processId));
+
+        if (lock.isExecuting()) {
+            // Another process is already executing
+            return false;
+        }
+
+        lock.setExecuting(true);
+        lock.setStartTime(LocalDateTime.now());
+        lock.setEndTime(null); // Reset end time because we are starting now
+        lock.setExecutingInstance(instanceIdentifier.getInstanceId());
+
+        repository.save(lock);
+        return true;
+    }
+
+    @Transactional
+    public void releaseLock(String processId) {
+        ProcessLock lock = repository.findById(processId)
+            .orElseThrow(() -> new IllegalStateException("No lock configuration found for process " + processId));
+
+        lock.setExecuting(false);
+        lock.setEndTime(LocalDateTime.now());
+        lock.setExecutingInstance(null);
+        // start_time puede quedar como histórico para ver cuando comenzó
+        repository.save(lock);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean isExecuting(String processId) {
+        return repository.findById(processId)
+            .map(ProcessLock::isExecuting)
+            .orElse(false);
+    }
+}
+
+-------------------------------------------------------------------------------------------------------------
+
+import javax.persistence.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "process_execution_history")
+public class ProcessExecutionHistory {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id")
+    private Long id;
+
+    @Column(name = "process_id", length = 100, nullable = false)
+    private String processId;
+
+    @Column(name = "job_type", length = 100, nullable = false)
+    private String jobType;
+
+    @Column(name = "status", length = 50, nullable = false)
+    private String status; // e.g. "STARTED", "FINISHED", "FAILED"
+
+    @Column(name = "start_time")
+    private LocalDateTime startTime;
+
+    @Column(name = "end_time")
+    private LocalDateTime endTime;
+
+    @Column(name = "executing_instance", length = 100)
+    private String executingInstance;
+
+    public ProcessExecutionHistory() {
+    }
+
+    public ProcessExecutionHistory(String processId, String jobType, String status, LocalDateTime startTime, LocalDateTime endTime, String executingInstance) {
+        this.processId = processId;
+        this.jobType = jobType;
+        this.status = status;
+        this.startTime = startTime;
+        this.endTime = endTime;
+        this.executingInstance = executingInstance;
+    }
+
+    // Getters and Setters
+    // ...
+}
+
+
+------------------------------------------------------------------------------------------------------
+
+CREATE TABLE [dbo].[process_execution_history] (
+    [id]                BIGINT IDENTITY(1,1) NOT NULL,
+    [process_id]        VARCHAR(100) NOT NULL,
+    [job_type]          VARCHAR(100) NOT NULL,
+    [status]            VARCHAR(50) NOT NULL,
+    [start_time]        DATETIME2 NULL,
+    [end_time]          DATETIME2 NULL,
+    [executing_instance] VARCHAR(100) NULL,
+    CONSTRAINT [PK_process_execution_history] PRIMARY KEY CLUSTERED ([id])
+);
+
+
+------------------------------------------------------------------------------------------------------
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface ProcessExecutionHistoryRepository extends JpaRepository<ProcessExecutionHistory, Long> {
+}
+
+------------------------------------------------------------------------------------------------------
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.time.LocalDateTime;
+
+@Service
+public class ProcessLockService {
+
+    private final ProcessLockRepository lockRepository;
+    private final ProcessExecutionHistoryRepository historyRepository;
+    private final InstanceIdentifier instanceIdentifier;
+
+    public ProcessLockService(
+        ProcessLockRepository lockRepository,
+        ProcessExecutionHistoryRepository historyRepository,
+        InstanceIdentifier instanceIdentifier
+    ) {
+        this.lockRepository = lockRepository;
+        this.historyRepository = historyRepository;
+        this.instanceIdentifier = instanceIdentifier;
+    }
+
+    @Transactional
+    public boolean acquireLock(String processId, String jobType) {
+        ProcessLock lock = lockRepository.findById(processId)
+            .orElseThrow(() -> new IllegalStateException("No lock configuration found for process " + processId));
+
+        if (lock.isExecuting()) {
+            // Already executing, log an attempt that was not started
+            ProcessExecutionHistory attempt = new ProcessExecutionHistory(
+                processId,
+                jobType,
+                "ALREADY_RUNNING",
+                LocalDateTime.now(),
+                null,
+                instanceIdentifier.getInstanceId()
+            );
+            historyRepository.save(attempt);
+            return false;
+        }
+
+        lock.setExecuting(true);
+        lock.setStartTime(LocalDateTime.now());
+        lock.setEndTime(null);
+        lock.setExecutingInstance(instanceIdentifier.getInstanceId());
+        lockRepository.save(lock);
+
+        // Log the start of execution in the history
+        ProcessExecutionHistory startEntry = new ProcessExecutionHistory(
+            processId,
+            jobType,
+            "STARTED",
+            lock.getStartTime(),
+            null,
+            lock.getExecutingInstance()
+        );
+        historyRepository.save(startEntry);
+
+        return true;
+    }
+
+    @Transactional
+    public void releaseLock(String processId) {
+        ProcessLock lock = lockRepository.findById(processId)
+            .orElseThrow(() -> new IllegalStateException("No lock configuration found for process " + processId));
+
+        lock.setExecuting(false);
+        lock.setEndTime(LocalDateTime.now());
+        String instance = lock.getExecutingInstance();
+        lock.setExecutingInstance(null);
+        lockRepository.save(lock);
+
+        // Log the end of execution in the history (FINISHED)
+        ProcessExecutionHistory endEntry = new ProcessExecutionHistory(
+            processId,
+            // You could determine jobType if stored in lock or passed as argument
+            // For simplicity, let's assume you know the jobType or store it somewhere.
+            // Let's say jobType was known or retrieved previously; if not, you can store jobType in lock or another structure.
+            "LOAD_CSV", // Example jobType
+            "FINISHED",
+            lock.getStartTime(),
+            lock.getEndTime(),
+            instance
+        );
+        historyRepository.save(endEntry);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean isExecuting(String processId) {
+        return lockRepository.findById(processId)
+            .map(ProcessLock::isExecuting)
+            .orElse(false);
+    }
+}
+
+------------------------------------------------------------------------------------------------------
+This functionality ensures that only one instance of a Java Spring Boot application executes a given process at a time. When a process (e.g., loading data from a CSV) is requested, the application attempts to acquire a lock in the database, marking the process as executing, recording the start time, and setting the executing instance’s unique ID. If another instance tries to run the same process concurrently, it is blocked and an attempt is recorded as "already running." Once the process finishes, the application releases the lock by setting the end time, clearing the executing instance, and logging a "finished" record. An execution history table stores each attempt’s process ID, job type, start and end times, status (such as "STARTED" or "FINISHED"), and which instance executed it. This history provides a clear audit trail and helps with monitoring, debugging, and reporting on process runs across multiple instances.
+------------------------------------------------------------------------------------------------------
+
+sequenceDiagram
+    participant C as Client
+    participant Ctrl as LoadController
+    participant L as ProcessLockService
+    participant LR as ProcessLockRepository
+    participant HR as ProcessExecutionHistoryRepository
+    participant DB as Database
+    participant II as InstanceIdentifier
+
+    C->>Ctrl: POST /load/start (jobType=LOAD_CSV)
+    Ctrl->>L: acquireLock("load_csv", "LOAD_CSV")
+    L->>LR: findById("load_csv")
+    LR->>DB: SELECT * FROM process_lock WHERE process_id='load_csv'
+    DB-->>LR: returns lock record (not executing)
+    LR-->>L: lock object
+
+    L->>LR: UPDATE lock SET is_executing=1, start_time=NOW(), end_time=NULL, executing_instance=II.getInstanceId()
+    LR->>DB: Execute UPDATE
+    DB-->>LR: OK
+    LR-->>L: lock updated (acquired)
+
+    L->>HR: INSERT INTO process_execution_history(status="STARTED", process_id="load_csv", job_type="LOAD_CSV", start_time=NOW(), executing_instance=II.getInstanceId())
+    HR->>DB: INSERT STARTED record
+    DB-->>HR: OK
+    HR-->>L: history record saved
+
+    L-->>Ctrl: true (lock acquired)
+    Ctrl->>Ctrl: Execute CSV load process (long-running)
+
+
+-----------------------------------------------------------------------------
+
+sequenceDiagram
+    participant C2 as Another Client
+    participant Ctrl as LoadController
+    participant L as ProcessLockService
+    participant LR as ProcessLockRepository
+    participant HR as ProcessExecutionHistoryRepository
+    participant DB as Database
+    participant II as InstanceIdentifier
+
+    C2->>Ctrl: POST /load/start (jobType=LOAD_CSV) while another process is running
+    Ctrl->>L: acquireLock("load_csv", "LOAD_CSV")
+    L->>LR: findById("load_csv")
+    LR->>DB: SELECT * FROM process_lock WHERE process_id='load_csv'
+    DB-->>LR: returns lock record (is_executing=true)
+    LR-->>L: lock object (busy)
+
+    L->>HR: INSERT INTO process_execution_history(status="ALREADY_RUNNING", process_id="load_csv", job_type="LOAD_CSV", start_time=NOW(), executing_instance=II.getInstanceId())
+    HR->>DB: INSERT ALREADY_RUNNING record
+    DB-->>HR: OK
+    HR-->>L: history record saved
+
+    L-->>Ctrl: false (cannot acquire lock)
+    Ctrl-->>C2: "Load process is currently running. Please try again later."
+
+
+------------------------------------------------------------------------------------------------
+
+sequenceDiagram
+    participant C as Client (original)
+    participant Ctrl as LoadController
+    participant L as ProcessLockService
+    participant LR as ProcessLockRepository
+    participant HR as ProcessExecutionHistoryRepository
+    participant DB as Database
+    
+    Ctrl->>L: releaseLock("load_csv")
+    L->>LR: findById("load_csv")
+    LR->>DB: SELECT * FROM process_lock WHERE process_id='load_csv'
+    DB-->>LR: returns lock record
+    LR-->>L: lock object
+
+    L->>LR: UPDATE lock SET is_executing=0, end_time=NOW(), executing_instance=NULL
+    LR->>DB: Execute UPDATE
+    DB-->>LR: OK
+    LR-->>L: lock updated (released)
+
+    L->>HR: INSERT INTO process_execution_history(status="FINISHED", process_id="load_csv", job_type="LOAD_CSV", start_time=[from lock], end_time=NOW(), executing_instance=[old instance])
+    HR->>DB: INSERT FINISHED record
+    DB-->>HR: OK
+    HR-->>L: history record saved
+
+    L-->>Ctrl: lock released
+    Ctrl-->>C: "Load completed successfully!"
+
+
+--------------------------------------------------------------------------------------------------------------------------------
+
+flowchart TD
+
+    A[Client Request: /load/start jobType=LOAD_CSV] --> B[acquireLock processId=load_csv, jobType=LOAD_CSV]
+    B -->|Check lock| C{lock.is_executing?}
+    C -->|Yes| D[INSERT ALREADY_RUNNING record into process_execution_history]
+    D --> E[Return response: Already running]
+    E --> F[End]
+
+    C -->|No| G[UPDATE process_lock: is_executing=1, start_time=NOW, end_time=NULL, executing_instance=InstanceID]
+    G --> H[INSERT STARTED record into process_execution_history]
+    H --> I[Return true: lock acquired]
+    I --> J[Execute CSV load process]
+
+----------------------------------------------------------------------------------------------------------------------------------
+
+flowchart TD
+
+    J[Process finishes execution] --> K[releaseLock load_csv]
+    K --> L[UPDATE process_lock: is_executing=0, end_time=NOW, executing_instance=NULL]
+    L --> M[INSERT FINISHED record into process_execution_history]
+    M --> N[Return: Load completed successfully]
+    N --> O[End]
+
+
+
+
