@@ -453,6 +453,55 @@ flowchart TD
     M --> N[Return: Load completed successfully]
     N --> O[End]
 
+## User Story
+
+**As a** system administrator responsible for data load operations,  
+**I want** to ensure that only one instance of the application can execute a specific process (such as CSV data loading) at a time, while maintaining a clear history of all attempts and outcomes,  
+**so that** I can prevent duplicate runs, easily track process executions, understand when and where processes were executed, and quickly identify any concurrent run attempts.
+
+---
+
+## Context
+
+Multiple instances of a Spring Boot application are running on the same machine, all capable of executing the same data-loading process. Without any coordination, multiple instances might attempt the process simultaneously, causing data inconsistencies and duplicates.
+
+---
+
+## Challenge
+
+- **Avoid Concurrent Executions:** Prevent multiple instances from running the same process at the same time to avoid data conflicts and duplicates.
+- **Maintain Audit Trail:** Keep a detailed record of all execution attempts, including start and end times, statuses, and the instances that executed or attempted to execute the processes.
+- **Facilitate Monitoring and Debugging:** Enable easy retrieval and analysis of process execution history for monitoring purposes, troubleshooting issues, and generating reports.
+
+---
+
+## Features
+
+- **Distributed Lock via Database:**  
+  A database table (`process_lock`) ensures only one instance at a time can execute the process. If another instance tries to start the process while it's running, it is denied and the attempt is recorded.
+
+- **Execution History Tracking:**  
+  Every attempt, including successful starts, concurrent "already running" attempts, and completions, is logged into a `process_execution_history` table. This record includes:
+  - **Process ID & Job Type:** Identifying the specific task.
+  - **Status:** "STARTED," "FINISHED," or "ALREADY_RUNNING."
+  - **Timestamps:** Start and end times to measure process duration.
+  - **Executing Instance:** A unique identifier for the application instance that ran (or attempted) the process.
+
+---
+
+## Benefits
+
+- **Data Integrity:**  
+  Ensures data is not corrupted or duplicated by simultaneous executions.
+
+- **Transparency and Auditing:**  
+  The history log provides a clear audit trail, making it easy to see when processes were executed, how long they took, and if there were concurrent attempts.
+
+- **Efficient Troubleshooting:**  
+  Detailed records enable quick identification of issues, improving mean time to resolution for process-related problems.
+
+- **Scalability and Reliability:**  
+  By centralizing the lock and history in a shared database, the solution works seamlessly across multiple instances, facilitating horizontal scaling without losing control or visibility.
 
 
 
