@@ -338,6 +338,57 @@ public class ProcessLockService {
 }
 
 ------------------------------------------------------------------------------------------------------
+
+
+@Service
+public class CsvLoaderService {
+
+    private final ProcessLockService lockService;
+    private final InstanceIdentifier instanceIdentifier;
+
+    public CsvLoaderService(ProcessLockService lockService, InstanceIdentifier instanceIdentifier) {
+        this.lockService = lockService;
+        this.instanceIdentifier = instanceIdentifier;
+    }
+
+    public void loadCsvData() {
+        String processId = "load_csv";
+        String jobType = "LOAD_CSV";
+        String currentInstance = instanceIdentifier.getInstanceId(); // ID único de la instancia actual
+
+        System.out.println("Instance " + currentInstance + " is attempting to start the CSV load process.");
+
+        if (lockService.acquireLock(processId, jobType)) {
+            // Lock adquirido con éxito, podemos ejecutar el proceso
+            try {
+                System.out.println("Instance " + currentInstance + ": Lock acquired. Starting CSV load...");
+
+                // Aquí iría la lógica real de cargar el CSV
+                performCsvLoad();
+
+                // Al terminar, liberamos el lock y registramos el FINISHED
+                lockService.releaseLock(processId);
+                System.out.println("Instance " + currentInstance + ": CSV load completed successfully.");
+            } catch (Exception e) {
+                // Si ocurre un error, liberamos el lock. Podrías también registrar un estado FAILED.
+                lockService.releaseLock(processId);
+                System.err.println("Instance " + currentInstance + ": Error during CSV load. Lock released.");
+            }
+        } else {
+            // Otro proceso está en ejecución
+            System.out.println("Instance " + currentInstance + ": Process is already running, cannot start.");
+        }
+    }
+
+    private void performCsvLoad() throws InterruptedException {
+        // Simulación del proceso de carga de CSV: lectura, validación, inserción en BD, etc.
+        // Aquí puedes colocar la lógica real.
+        Thread.sleep(3000); // Simula tiempo de trabajo
+    }
+}
+
+
+------------------------------------------------------------------------------------------------------
 This functionality ensures that only one instance of a Java Spring Boot application executes a given process at a time. When a process (e.g., loading data from a CSV) is requested, the application attempts to acquire a lock in the database, marking the process as executing, recording the start time, and setting the executing instance’s unique ID. If another instance tries to run the same process concurrently, it is blocked and an attempt is recorded as "already running." Once the process finishes, the application releases the lock by setting the end time, clearing the executing instance, and logging a "finished" record. An execution history table stores each attempt’s process ID, job type, start and end times, status (such as "STARTED" or "FINISHED"), and which instance executed it. This history provides a clear audit trail and helps with monitoring, debugging, and reporting on process runs across multiple instances.
 ------------------------------------------------------------------------------------------------------
 
