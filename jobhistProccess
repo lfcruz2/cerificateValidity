@@ -556,3 +556,160 @@ Multiple instances of a Spring Boot application are running on the same machine,
 
 
 
+---------------------------------------------------------------------------------------------------------------------------------------
+
+public final class ProcessConstants {
+    
+    private ProcessConstants() {
+        // Evitar instanciación
+    }
+
+    // Estados del proceso
+    public static final String STATUS_STARTED = "STARTED";
+    public static final String STATUS_FINISHED = "FINISHED";
+    public static final String STATUS_ALREADY_RUNNING = "ALREADY_RUNNING";
+
+    // ID de proceso (por ejemplo, para el proceso load_csv)
+    public static final String PROCESS_ID_LOAD_CSV = "load_csv";
+    public static final String JOB_TYPE_LOAD_CSV = "LOAD_CSV";
+}
+---------------------------------------------------------------------------------------------------------------------------------------
+
+
+@Service
+public class ProcessLockService {
+
+    private final ProcessLockRepository lockRepository;
+    private final ProcessExecutionHistoryRepository historyRepository;
+    private final InstanceIdentifier instanceIdentifier;
+
+    public ProcessLockService(
+        ProcessLockRepository lockRepository,
+        ProcessExecutionHistoryRepository historyRepository,
+        InstanceIdentifier instanceIdentifier
+    ) {
+        this.lockRepository = lockRepository;
+        this.historyRepository = historyRepository;
+        this.instanceIdentifier = instanceIdentifier;
+    }
+
+    @Transactional
+    public boolean acquireLock(String processId, String jobType) {
+        ProcessLock lock = lockRepository.findById(processId)
+            .orElseThrow(() -> new IllegalStateException("No lock configuration found for process " + processId));
+
+        if (lock.isExecuting()) {
+            // Otro proceso ya está en ejecución
+            ProcessExecutionHistory attempt = new ProcessExecutionHistory(
+                processId,
+                jobType,
+                ProcessConstants.STATUS_ALREADY_RUNNING,
+                LocalDateTime.now(),
+                null,
+                instanceIdentifier.getInstanceId()
+            );
+            historyRepository.save(attempt);
+            return false;
+        }
+
+        // Adquirir el lock
+        lock.setExecuting(true);
+        lock.setStartTime(LocalDateTime.now());
+        lock.setEndTime(null);
+        lock.setExecutingInstance(instanceIdentifier.getInstanceId());
+        lockRepository.save(lock);
+
+        // Registrar que el proceso inició
+        ProcessExecutionHistory startEntry = new ProcessExecutionHistory(
+            processId,
+            jobType,
+            ProcessConstants.STATUS_STARTED,
+            lock.getStartTime(),
+            null,
+            lock.getExecutingInstance()
+        );
+        historyRepository.save(startEntry);
+
+        return true;
+    }
+
+    @Transactional
+    public void releaseLock(String processId, String jobType) {
+        ProcessLock lock = lockRepository.findById(processId)
+            .orElseThrow(() -> new IllegalStateException("No lock configuration found for process " + processId));
+
+        LocalDateTime now = LocalDateTime.now();
+        String previousInstance = lock.getExecutingInstance();
+        LocalDateTime startTime = lock.getStartTime();
+
+        // Liberar el lock
+        lock.setExecuting(false);
+        lock.setEndTime(now);
+        lock.setExecutingInstance(null);
+        lockRepository.save(lock);
+
+        // Registrar finalización en el historial
+        ProcessExecutionHistory finishedEntry = new ProcessExecutionHistory(
+            processId,
+            jobType,
+            ProcessConstants.STATUS_FINISHED,
+            startTime,
+            now,
+            previousInstance
+        );
+        historyRepository.save(finishedEntry);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean isExecuting(String processId) {
+        return lockRepository.findById(processId)
+            .map(ProcessLock::isExecuting)
+            .orElse(false);
+    }
+}
+
+---------------------------------------------------------------------------------------------------------------------------------------
+@Service
+public class CsvLoaderService {
+
+    private final ProcessLockService lockService;
+    private final InstanceIdentifier instanceIdentifier;
+
+    public CsvLoaderService(ProcessLockService lockService, InstanceIdentifier instanceIdentifier) {
+        this.lockService = lockService;
+        this.instanceIdentifier = instanceIdentifier;
+    }
+
+    public void loadCsvData() {
+        String processId = ProcessConstants.PROCESS_ID_LOAD_CSV;
+        String jobType = ProcessConstants.JOB_TYPE_LOAD_CSV;
+        String currentInstance = instanceIdentifier.getInstanceId();
+
+        System.out.println("Instance " + currentInstance + " attempting to start the CSV load.");
+
+        if (lockService.acquireLock(processId, jobType)) {
+            try {
+                System.out.println("Instance " + currentInstance + ": Lock acquired, performing CSV load...");
+                performCsvLoad();
+
+                lockService.releaseLock(processId, jobType);
+                System.out.println("Instance " + currentInstance + ": CSV load completed successfully.");
+            } catch (Exception e) {
+                lockService.releaseLock(processId, jobType);
+                System.err.println("Instance " + currentInstance + ": Error during CSV load. Lock released.");
+            }
+        } else {
+            System.out.println("Instance " + currentInstance + ": Process is already running, cannot start.");
+        }
+    }
+
+    private void performCsvLoad() throws InterruptedException {
+        // Lógica real de carga de CSV
+        Thread.sleep(2000);
+    }
+}
+
+
+
+
+
