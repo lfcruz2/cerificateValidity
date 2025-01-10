@@ -1,0 +1,47 @@
+sequenceDiagram
+    participant C as Client
+    participant S as API Server
+    participant DB as Database
+    participant ES as Background Export Service
+    participant FS as File Storage
+
+    %% Initiate Export
+    C->>S: POST /api/export/csv\n(with JWT & JSON filter)
+    S->>S: Validate JWT
+    S->>DB: Log request details\n(username, filters, timestamp)
+    S->>ES: Start async export(request, username)
+    S-->>C: 202 Accepted\n(exportId, status URL)
+
+    %% Asynchronous Export Processing
+    ES->>DB: Query filtered data
+    ES->>FS: Generate CSV in chunks
+    ES->>DB: Update export status to "completed"
+    ES->>FS: Save final CSV file
+
+    %% Polling Status and Download
+    C->>S: GET /api/export/csv/status/{exportId}\n(with JWT)
+    S->>S: Validate JWT
+    S->>DB: Retrieve export status
+    alt if export ready
+        S-->>C: 200 OK (download URL or file)
+    else if still processing
+        S-->>C: 200 OK (current status)
+    end
+    %% Optionally, client downloads file directly from storage URL
+    C->>FS: GET file from download URL
+
+
+sequenceDiagram
+    participant C as Client
+    participant S as API Server
+    participant DB as Database
+
+    loop For Each Page Request
+        C->>S: POST /api/export/csv/page?page=X&size=N\n(with JWT & filter)
+        S->>S: Validate JWT
+        S->>DB: Log request details for page X
+        S->>DB: Query database with filter\n(pagination: page=X, size=N)
+        DB-->>S: Return page X data
+        S->>S: Convert data to CSV/JSON
+        S-->>C: 200 OK\n(Page X CSV/JSON response)
+    end
