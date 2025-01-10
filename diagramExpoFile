@@ -45,3 +45,62 @@ sequenceDiagram
         S->>S: Convert data to CSV/JSON
         S-->>C: 200 OK\n(Page X CSV/JSON response)
     end
+
+
+
+sequenceDiagram
+    participant C as Client
+    participant S as API Server
+    participant DB as Database
+    participant ES as Background Export Service
+    participant FS as File Storage
+    participant WH as Webhook Endpoint
+
+    %% Initiate Export with Webhook URL
+    C->>S: POST /api/export/csv\n(with JWT, JSON filter, webhook URL)
+    S->>S: Validate JWT
+    S->>DB: Log request details\n(username, filters, timestamp, webhook URL)
+    S->>ES: Start async export(request, username, webhook URL)
+    S-->>C: 202 Accepted\n(exportId, status URL)
+
+    %% Asynchronous Export Processing
+    ES->>DB: Query filtered data
+    ES->>FS: Generate CSV in chunks
+    ES->>DB: Update export status to "completed"
+    ES->>FS: Save final CSV file
+
+    %% Notify via Webhook when ready
+    ES->>WH: POST to webhook URL\n(payload: {exportId, downloadURL})
+    WH-->>ES: 200 OK
+
+    %% Optionally, client can still poll for status if needed
+    C->>S: GET /api/export/csv/status/{exportId}\n(with JWT)
+    S->>DB: Retrieve export status
+    alt if export ready
+        S-->>C: 200 OK (download URL or file)
+    else
+        S-->>C: 200 OK (not ready yet)
+    end
+
+
+Asynchronous CSV Export with Polling (Option 1):
+
+The client initiates a CSV export request which is processed asynchronously by the server.
+The server immediately responds with an acknowledgment and an export ID.
+A background service generates the CSV file in the background.
+The client periodically polls the server's status endpoint to check if the CSV file is ready for download.
+This decouples the lengthy export process from the client's request cycle, providing a better user experience without long wait times.
+Paginated JSON/CSV Responses (Option 2):
+
+Instead of generating a large CSV file in one go, the server handles data retrieval in paginated chunks.
+The client requests data page by page, each request authenticated by JWT and logged on the server.
+The server queries the database for the specific page of data, converts it to CSV/JSON, and returns it.
+This approach reduces response time and memory usage per request since only subsets of data are handled at a time.
+The client iteratively requests all pages to assemble the complete dataset as needed.
+Asynchronous CSV Export with Webhook Notification (Variation of Option 1):
+
+Similar to the first asynchronous approach, but here the client provides a webhook URL when initiating the export.
+The server processes the export asynchronously and, upon completion, notifies the client by sending a POST request to the provided webhook URL.
+The notification contains information such as the export ID and the download URL for the CSV file.
+This removes the need for the client to poll for status, as the client is proactively informed when the file is ready.
+The client can use the webhook data to download the file or trigger further processing automatically.
