@@ -1,0 +1,165 @@
+
+
+
+flowchart TB
+
+    %% Phase 1: Data Preparation
+    subgraph Phase1[**Phase 1: Data Preparation**]
+        A1[1.1 Collect Raw & C&A Transactions]
+        A2[1.2 Validate Data IDs & Timestamps]
+        A3[1.3 Create Master DataFrame Canceled & Replacement]
+        A4[1.4 Clean & Preprocess Missing, Outliers, Types]
+        A1 --> A2 --> A3 --> A4
+    end
+
+    %% Phase 2: Exploratory Data Analysis (EDA)
+    subgraph Phase2[**Phase 2: Exploratory Data Analysis**]
+        B1[2.1 Numeric Analysis]
+        B2[2.2 Text & Time Analysis]
+        B3[2.3 Feature Engineering Similarity Measures]
+        B1 --> B2 --> B3
+    end
+
+    %% Phase 3: Modeling
+    subgraph Phase3[**Phase 3: Modeling**]
+        C1[3.1 Initial Training - Numeric/ Text/ Time]
+        C2[3.2 Evaluate & Record Baseline Results]
+        C3[3.3 Configure & Test Various Columns]
+        C4[3.4 Hyperparameter Tuning with Best Features]
+        C5[3.5 Select Best Model & Settings]
+        C1 --> C2 --> C3 --> C4 --> C5
+    end
+
+    %% Phase 4: Deployment
+    subgraph Phase4[**Phase 4: Deployment**]
+        D1[4.1 Build FastAPI App - Train/Eval Endpoints]
+        D2[4.2 Create Inference Endpoint - Top 5 Replacements]
+        D3[4.3 Refine & Iterate]
+        D1 --> D2 --> D3
+    end
+
+    %% Connect the phases vertically
+    Phase1 --> Phase2
+    Phase2 --> Phase3
+    Phase3 --> Phase4
+
+------------------------------------------------------------------------------------------------------------
+
+flowchart TB
+subgraph Phase1[**Phase 1: Data Preparation**]
+direction TB
+
+subgraph StepA1
+direction LR
+    A1[1.1 Collect Raw & C&A Transactions] -- desc --> A1Desc((• Gather from various sources<br/>• Consolidate in one place))
+end
+
+subgraph StepA2
+direction LR
+    A2[1.2 Validate Data IDs & Timestamps] -- desc --> A2Desc((• Match canceled & replaced<br/>• Remove invalid pairs))
+end
+
+subgraph StepA3
+direction LR
+    A3[1.3 Create Master DataFrame] -- desc --> A3Desc((• Combine canceled & replaced<br/>• Generate unique IDs))
+end
+
+subgraph StepA4
+direction LR
+    A4[1.4 Clean & Preprocess] -- desc --> A4Desc((• Handle missing/outliers<br/>• Convert data types))
+end
+
+StepA1 --> StepA2
+StepA2 --> StepA3
+StepA3 --> StepA4
+end
+
+------------------------------------------------------------------------------------------------------------
+flowchart TB
+subgraph Phase2[**Phase 2: Exploratory Data Analysis (EDA)**]
+direction TB
+
+subgraph StepB1
+direction LR
+    B1[2.1 Numeric Analysis] -- desc --> B1Desc((• Stats & correlations<br/>• Outlier detection))
+end
+
+subgraph StepB2
+direction LR
+    B2[2.2 Text & Time Analysis] -- desc --> B2Desc((• Frequency distributions<br/>• Time-based patterns))
+end
+
+subgraph StepB3
+direction LR
+    B3[2.3 Feature Engineering] -- desc --> B3Desc((• Similarity measures<br/>• TF-IDF, embeddings))
+end
+
+StepB1 --> StepB2
+StepB2 --> StepB3
+end
+
+
+------------------------------------------------------------------------------------------------------------
+flowchart TB
+subgraph Phase3[**Phase 3: Modeling**]
+direction TB
+
+subgraph StepC1
+direction LR
+    C1[3.1 Initial Training] -- desc --> C1Desc((• Evaluate baseline<br/>• Numeric/Text/Time))
+end
+
+subgraph StepC2
+direction LR
+    C2[3.2 Record Results] -- desc --> C2Desc((• Log accuracy, F1, etc.<br/>• Save to files/db))
+end
+
+subgraph StepC3
+direction LR
+    C3[3.3 Test Various Columns] -- desc --> C3Desc((• Config file approach<br/>• Automated script))
+end
+
+subgraph StepC4
+direction LR
+    C4[3.4 Hyperparameter Tuning] -- desc --> C4Desc((• Use best features<br/>• Grid/Random search))
+end
+
+subgraph StepC5
+direction LR
+    C5[3.5 Select Best Model] -- desc --> C5Desc((• Final choice<br/>• Ready for deployment))
+end
+
+StepC1 --> StepC2
+StepC2 --> StepC3
+StepC3 --> StepC4
+StepC4 --> StepC5
+end
+
+
+------------------------------------------------------------------------------------------------------------
+
+flowchart TB
+subgraph Phase4[**Phase 4: Deployment**]
+direction TB
+
+subgraph StepD1
+direction LR
+    D1[4.1 Build FastAPI App] -- desc --> D1Desc((• Train/Eval endpoints<br/>• Swagger docs))
+end
+
+subgraph StepD2
+direction LR
+    D2[4.2 Inference Endpoint] -- desc --> D2Desc((• Input canceled record<br/>• Return top 5 matches))
+end
+
+subgraph StepD3
+direction LR
+    D3[4.3 Refine & Iterate] -- desc --> D3Desc((• Gather feedback<br/>• Retrain/improve))
+end
+
+StepD1 --> StepD2
+StepD2 --> StepD3
+end
+
+
+
