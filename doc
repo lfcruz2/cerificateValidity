@@ -1,1 +1,80 @@
 
+sequenceDiagram
+    participant Scheduler as Daily Scheduler/Cron
+    participant W as Backend W (Spring Boot)
+    participant Auth as Auth Service (out2) [Endpoint 2]
+    participant B as Backend 1
+    participant SFTP as SFTP Server
+    
+    rect rgb(239, 239, 239)
+    note over Scheduler,W: Occurs once per day at fixed time
+    Scheduler-->>W: 1. Trigger Data Aggregation Job
+    end
+
+    W->>Auth: 2. Request Client Credentials Token
+    Auth-->>W: 3. Return Token (valid for limited time)
+
+    note over W: Use valid Token for each data request
+    
+    loop Iterate over pages
+        W->>B: 4. GET data (page X) with Token
+        B-->>W: 5. Return data (page X)
+    end
+
+    note over W: After fetching all pages, compile data
+
+    W->>W: 6. Generate CSV file (date-stamped)
+    W->>SFTP: 7. Upload CSV file
+    SFTP-->>W: 8. Confirm upload success/failure
+
+    note over W,Scheduler: Job completes, data is now traceable in SFTP
+
+
+
+-------------------------------------------------------------------
+
+
+
+flowchart LR
+    %% Subgraph for the Auth Service with multiple endpoints
+    subgraph AuthService[Auth Service out2]
+      A1[Endpoint 1<br/> - User Credentials → Auth Code]
+      A2[Endpoint 2<br/> - Client Credentials → Token]
+      A3[Endpoint 3<br/> - User Data via Auth Code]
+    end
+
+    %% Frontend
+    F[React/Next<br/>Application]
+
+    %% "Backend 1" (often your main application backend)
+    subgraph Backend1[Backend 1]
+      B[Spring Boot / .NET / etc.]
+      DB[(SQL Server)]
+      B --> DB
+    end
+
+    %% New Spring Boot backend (Backend W) with SFTP
+    subgraph BackendW[Backend W - Spring Boot]
+      W[Spring Boot<br/>No DB]
+      SFTP[(SFTP<br/>File Server)]
+      W --> SFTP
+    end
+
+    %% Connections
+    %% React / Next connections
+    F --> |Redirect to Login| A1
+    F --> |Request Client<br/>Credentials Token| A2
+    F --> |Get User Info<br/>from Auth Code| A3
+    F --> |API Calls with Token| B
+
+    %% Backend W connections
+    W --> |Request Client<br/>Credentials Token| A2
+    W --> |Iterative Data Requests| B
+
+    %% Draw styles for clarity
+    style AuthService fill:#ccf,stroke:#036,stroke-width:1px
+    style F fill:#cfc,stroke:#090,stroke-width:1px
+    style B fill:#ffc,stroke:#950,stroke-width:1px
+    style DB fill:#fff,stroke:#555,stroke-dasharray: 5 5
+    style W fill:#cfc,stroke:#060,stroke-width:1px
+    style SFTP fill:#fff,stroke:#555,stroke-dasharray: 5 5
