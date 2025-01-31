@@ -1,4 +1,137 @@
+classDiagram
 
+%% =============================
+%% CLASS: df3_data
+%% =============================
+class df3_data {
+    +int df3_id
+    +string feature_1
+    +string feature_2
+    %% ...
+    +datetime created_at
+    +datetime updated_at
+}
+
+%% =============================
+%% CLASS: columns_info
+%% =============================
+class columns_info {
+    +int column_id
+    +string column_name
+    +string column_type  %% e.g., "numeric", "text", "time"
+}
+
+%% =============================
+%% CLASS: test_config
+%% =============================
+class test_config {
+    +int test_config_id
+    +string description
+    +string category
+    +string column_selection_strategy
+}
+
+%% =============================
+%% CLASS: models
+%% =============================
+class models {
+    +int model_id
+    +string model_name
+    +string model_type
+    +string model_location
+    +bool is_active
+}
+
+%% =============================
+%% CLASS: model_hyperparams
+%% =============================
+class model_hyperparams {
+    +int hyperparam_id
+    +int model_id
+    +string param_name
+    +string param_value
+}
+
+%% =============================
+%% CLASS: test_runs
+%% =============================
+class test_runs {
+    +int test_run_id
+    +datetime run_date
+    +int model_id
+    +string hyperparams_used
+    +float accuracy
+    +float accuracy_top5
+    +float run_time_seconds
+    +string category
+    +string notes
+}
+
+%% =============================
+%% CLASS: test_run_columns
+%% =============================
+class test_run_columns {
+    +int test_run_columns_id
+    +int test_run_id
+    +int column_id
+}
+
+%% =============================
+%% RELATIONSHIPS
+%% =============================
+
+%% model_hyperparams --> models (1..*)
+model_hyperparams --> models : "belongs to"
+
+%% test_runs --> models (1..*)
+test_runs --> models : "references"
+
+%% test_run_columns --> test_runs (1..*)
+test_run_columns --> test_runs : "belongs to"
+
+%% test_run_columns --> columns_info (1..*)
+test_run_columns --> columns_info : "uses"
+
+%% Note that df3_data stands alone for training features
+
+
+
+flowchart LR
+
+    A((User/Client)) -->|API Calls| B[FastAPI Application]
+
+    subgraph AppComponents[Inside FastAPI Application]
+    direction TB
+    C1[API Endpoints <br/>(/test-run, /test-config, /models, etc.)]
+    C2[Model Trainer/Evaluator <br/>(Python modules)]
+    end
+
+    B --> C1
+    C1 --> C2
+
+    subgraph Database[SQL Server]
+    direction TB
+    T1[df3_data]
+    T2[columns_info]
+    T3[test_config]
+    T4[models]
+    T5[model_hyperparams]
+    T6[test_runs]
+    T7[test_run_columns]
+    end
+
+    C2 -->|Queries/Inserts| T1
+    C2 --> T2
+    C2 --> T3
+    C2 --> T4
+    C2 --> T5
+    C2 --> T6
+    C2 --> T7
+
+    B -.->|Optional| E[Model Files <br/>(Artifacts)]
+
+--
+-----------------------------------------------------------------
 
 ---
 
