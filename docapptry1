@@ -1,0 +1,273 @@
+
+
+---
+
+## **Endpoints Overview**
+
+| **Endpoint**                                      | **HTTP Method** | **Purpose**                                                                                                                                                                                                                                                             | **Key DB Tables**                                                                                         | **Request (Input)**                                                                                                                                                                                                                                           | **Response**                                                                                                                                                                                                                                                              |
+|---------------------------------------------------|----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **1. `/test-run/single`**                         | **POST**       | - **Train & evaluate** a single test using specified model, columns, and hyperparameters.<br/>- Return the **results** in the response.<br/>- **Save** the result in the database.                                                                                     | - `models`<br/>- `test_runs`<br/>- `test_run_columns`<br/>- `columns_info` (lookup if needed)               | JSON body with:<br/>- `model_id` or `model_name`<br/>- `hyperparams` (JSON or key-value)<br/>- `column_ids` (array of IDs) **OR** reference to a test config ID<br/>- Optional `category` name if you want to tag it<br/>- Possibly a flag `save_result=true` (default) | JSON response containing:<br/>- `test_run_id`<br/>- Performance metrics (accuracy, top-5 accuracy, etc.)<br/>- Model details used                                                                                                                                        |
+| **2. `/test-run/batch`**                          | **POST**       | - Execute **multiple** predefined tests in a **given category** (or a list of `test_config` IDs).<br/>- Return the **aggregated results** (and also store them).                                                                                                                                              | - `test_config`<br/>- `models`<br/>- `test_runs`<br/>- `test_run_columns`<br/>- `columns_info`              | JSON body with:<br/>- `category` (string) to select all test configs in that category **OR** <br/>- An array `test_config_ids` to specify which tests to run<br/>- Possibly `save_result` boolean                                                                     | JSON with a list of test runs completed, including their results (metrics, run_time, etc.).                                                                                                                                                                              |
+| **3. `/test-config/generate-random`**             | **POST**       | - **Create multiple test configs** randomly.<br/>- E.g., pick subsets of columns from `columns_info` and assign a model/hyperparam set.<br/>- Assign them all to a **category** so they can be batch-executed later.                                                                                          | - `test_config`<br/>- `columns_info`<br/>- `models`<br/>- `model_hyperparams` (optional)                     | JSON body with:<br/>- `model_id` (or multiple models) to consider<br/>- `possible_column_ids` (list) from which to randomly pick<br/>- `num_tests` (int) → how many random combos to generate<br/>- `category` to label these new tests<br/>- Possibly a range or list of hyperparams.          | JSON confirming how many test configs were created and their IDs.                                                                                                                                                                                                         |
+| **4. `/test-config/list`** (optional)             | **GET**        | - Retrieve all **test configurations** (or filter by category).<br/>- Useful to see what test configs exist before batch execution.                                                                                                                                                                          | - `test_config`                                                                                              | Query parameters (e.g., `category`, `limit`, `offset`)                                                                                                                                                                                                                    | JSON array of test configs, each with a config ID, description, model reference, column selection strategy, category, etc.                                                                                                                                                 |
+| **5. `/test-config/{id}`** (optional)             | **GET**        | - Retrieve **details** of a single test config, including which model, column selection approach, category, etc.                                                                                                                                                                                              | - `test_config`                                                                                              | Path param: `id` (int)                                                                                                                                                                                                                                                    | JSON object describing that test config’s details (model, columns strategy, category, etc.).                                                                                                                                                                              |
+| **6. `/test-runs/{id}`** (optional)               | **GET**        | - Retrieve **details** and results for a single **completed** test run.                                                                                                                                                                                                                                       | - `test_runs`<br/>- `test_run_columns`<br/>- `models` (if needed)                                                                                  | Path param: `id` (int)                                                                                                                                                                                                                                                    | JSON object containing the metrics, the columns used, the model/hyperparams, and possibly a reference to logs or notes.                                                                                                                                                    |
+| **7. `/test-runs`** (optional)                    | **GET**        | - Retrieve a list of **completed** test runs, with optional filters (category, model_id, date range).                                                                                                                                                                                                         | - `test_runs`<br/>- `test_run_columns`                                                                                                              | Query parameters, e.g., `category`, `model_id`, date range, etc.                                                                                                                                                                                                          | JSON array of test runs, each containing run_id, metrics, date, model reference, and/or minimal columns used (if you want details, you might query each run individually).                                                                                                                                         |
+| **8. `/models`** (optional)                       | **GET**        | - List all registered **models** in the system.                                                                                                                                                                                                                                                               | - `models`<br/>- `model_hyperparams`                                                                                                                | Possibly filter by `is_active`.                                                                                                                                                                                                                                            | JSON array of model entries (model_id, name, type, location).                                                                                                                                                                                                             |
+| **9. `/models`** (optional)                       | **POST**       | - Register a **new model** or update an existing model’s info.                                                                                                                                                                                                                                                | - `models`<br/>- `model_hyperparams`                                                                                                                | JSON with `model_name`, `model_type`, optional `hyperparams` array or JSON, etc.                                                                                                                                                                                          | JSON with the newly created/updated `model_id`.                                                                                                                                                                                                                           |
+
+---
+
+1. **Single & Batch Test Runs**  
+   - **`test_runs`**: Each endpoint that triggers a **train/evaluation** will create a row in `test_runs` with the resulting metrics.  
+   - **`test_run_columns`**: If you pick columns dynamically, you store them here so you know exactly which columns were used in each run.
+
+2. **Random Test Generation**  
+   - **`test_config`**: Insert multiple rows for randomly created test configurations (the columns, model, category, etc.).  
+   - Later, you can **batch execute** those test configs, creating records in `test_runs`.
+
+3. **Categories**  
+   - In the table design we discussed, you can add a `category` field (VARCHAR) to **`test_config`** or **`test_runs`**. This field lets you group tests or runs by a label, making it easy to:
+     - Retrieve them (`GET /test-config/list?category=...`)  
+     - Execute them (`POST /test-run/batch` with that category).
+
+4. **Traceability**  
+   - Because **`test_runs`** references a `model_id` (pointing to `models`), you can see which model was used.  
+   - Because **`test_run_columns`** references each `column_id` used, you can see which columns were included.  
+   - Because **`test_runs`** can store or reference `hyperparams_used`, you know which hyperparameters were used.  
+   - This structure ensures you can **trace** a specific run’s inputs and outputs.
+
+5. **Simplicity**  
+   - **`df3_data`** remains the single table for the actual feature data. You typically won’t create or update this via these endpoints—rather, you just read from it during training/evaluation.  
+   - **`columns_info`** helps you or your code pick columns by type (numeric, text, time).  
+   - **Optional** endpoints let you read or write to `models`, `test_config`, or retrieve test results from `test_runs`.
+
+-------------------------------------------------------------------------------
+
+
+## 1. **Mermaid Data Model**
+
+```mermaid
+erDiagram
+
+    %% =========================
+    %%  TABLE: df3_data
+    %% =========================
+    df3_data {
+        INT df3_id PK
+        -- Up to ~100 columns for training-ready features --
+        -- e.g.:
+        STRING feature_1
+        STRING feature_2
+        -- ...
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    %% =========================
+    %%  TABLE: columns_info
+    %% =========================
+    columns_info {
+        INT column_id PK
+        STRING column_name
+        STRING column_type   -- e.g., "numeric", "text", "time"
+    }
+
+    %% =========================
+    %%  TABLE: test_config
+    %% =========================
+    test_config {
+        INT test_config_id PK
+        STRING description
+        STRING category
+        STRING column_selection_strategy
+        -- Possibly store target hyperparam range or model references
+    }
+
+    %% =========================
+    %%  TABLE: models
+    %% =========================
+    models {
+        INT model_id PK
+        STRING model_name
+        STRING model_type
+        STRING model_location
+        BOOLEAN is_active
+    }
+
+    %% =========================
+    %%  TABLE: model_hyperparams
+    %% =========================
+    model_hyperparams {
+        INT hyperparam_id PK
+        INT model_id FK
+        STRING param_name
+        STRING param_value
+    }
+
+    %% =========================
+    %%  TABLE: test_runs
+    %% =========================
+    test_runs {
+        INT test_run_id PK
+        DATETIME run_date
+        INT model_id FK
+        STRING hyperparams_used  -- or JSON
+        FLOAT accuracy
+        FLOAT accuracy_top5
+        FLOAT run_time_seconds
+        STRING category
+        STRING notes
+    }
+
+    %% =========================
+    %%  TABLE: test_run_columns
+    %% =========================
+    test_run_columns {
+        INT test_run_columns_id PK
+        INT test_run_id FK
+        INT column_id FK
+    }
+
+    %% =========================
+    %% RELATIONSHIPS
+    %% =========================
+    model_hyperparams ||--|| models : "defines hyperparams"
+    test_runs ||--|| models : "references model"
+    test_run_columns }o--|| test_runs : "belongs to"
+    test_run_columns }o--|| columns_info : "refers to"
+```
+
+### **Notes**
+- `df3_data` has no direct foreign keys to others (by design, it’s your training-ready data store).  
+- `columns_info` describes the columns in `df3_data` (whether they’re numeric, text, time, etc.).  
+- `test_config` (optional) stores planned test definitions (column selection strategy, category).  
+- `models` and `model_hyperparams` store which models exist and their parameter sets.  
+- `test_runs` records each executed run (performance metrics, the model used, etc.).  
+- `test_run_columns` is a **bridge table**: which columns (from `columns_info`) were used in a particular test run?
+
+---
+
+## 2. **SQL Server DDL**
+
+```sql
+--------------------------------------------
+-- TABLE: df3_data
+--------------------------------------------
+CREATE TABLE dbo.df3_data (
+    df3_id              INT IDENTITY(1,1) PRIMARY KEY,
+    -- Example feature columns (up to ~100):
+    feature_1           VARCHAR(200) NULL,
+    feature_2           VARCHAR(200) NULL,
+    -- Add more feature columns as needed...
+    created_at          DATETIME2    NOT NULL CONSTRAINT DF_df3_data_created_at DEFAULT (SYSDATETIME()),
+    updated_at          DATETIME2    NULL
+);
+GO
+
+--------------------------------------------
+-- TABLE: columns_info
+--------------------------------------------
+CREATE TABLE dbo.columns_info (
+    column_id    INT IDENTITY(1,1) PRIMARY KEY,
+    column_name  VARCHAR(200) NOT NULL,
+    column_type  VARCHAR(50)  NOT NULL
+    -- e.g. "numeric", "text", "time"
+);
+GO
+
+--------------------------------------------
+-- TABLE: test_config
+--------------------------------------------
+CREATE TABLE dbo.test_config (
+    test_config_id            INT IDENTITY(1,1) PRIMARY KEY,
+    [description]             VARCHAR(500)   NULL,
+    [category]                VARCHAR(100)   NULL,
+    column_selection_strategy VARCHAR(200)   NULL
+    -- Optionally store min/max hyperparams or model references
+);
+GO
+
+--------------------------------------------
+-- TABLE: models
+--------------------------------------------
+CREATE TABLE dbo.models (
+    model_id       INT IDENTITY(1,1) PRIMARY KEY,
+    model_name     VARCHAR(200) NOT NULL,
+    model_type     VARCHAR(100) NOT NULL,   -- e.g., "RandomForest", "XGBoost"
+    model_location VARCHAR(500) NULL,       -- path or URI to the model artifact
+    is_active      BIT          NOT NULL CONSTRAINT DF_models_is_active DEFAULT(0)
+);
+GO
+
+--------------------------------------------
+-- TABLE: model_hyperparams
+--------------------------------------------
+CREATE TABLE dbo.model_hyperparams (
+    hyperparam_id  INT IDENTITY(1,1) PRIMARY KEY,
+    model_id       INT         NOT NULL,
+    param_name     VARCHAR(200) NOT NULL,
+    param_value    VARCHAR(200) NOT NULL,
+    CONSTRAINT FK_model_hyperparams_model 
+        FOREIGN KEY (model_id) 
+        REFERENCES dbo.models(model_id)
+        ON DELETE CASCADE
+);
+GO
+
+--------------------------------------------
+-- TABLE: test_runs
+--------------------------------------------
+CREATE TABLE dbo.test_runs (
+    test_run_id       INT IDENTITY(1,1) PRIMARY KEY,
+    run_date          DATETIME2  NOT NULL CONSTRAINT DF_test_runs_run_date DEFAULT (SYSDATETIME()),
+    model_id          INT        NOT NULL,
+    hyperparams_used  VARCHAR(MAX) NULL,   -- store as JSON or text
+    accuracy          FLOAT      NULL,
+    accuracy_top5     FLOAT      NULL,
+    run_time_seconds  FLOAT      NULL,
+    [category]        VARCHAR(100) NULL,
+    notes             VARCHAR(1000) NULL,
+    CONSTRAINT FK_test_runs_model 
+        FOREIGN KEY (model_id) 
+        REFERENCES dbo.models(model_id)
+        ON DELETE NO ACTION
+);
+GO
+
+--------------------------------------------
+-- TABLE: test_run_columns
+--------------------------------------------
+CREATE TABLE dbo.test_run_columns (
+    test_run_columns_id INT IDENTITY(1,1) PRIMARY KEY,
+    test_run_id         INT NOT NULL,
+    column_id           INT NOT NULL,
+
+    CONSTRAINT FK_trc_test_run
+        FOREIGN KEY (test_run_id)
+        REFERENCES dbo.test_runs(test_run_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT FK_trc_columns_info
+        FOREIGN KEY (column_id)
+        REFERENCES dbo.columns_info(column_id)
+        ON DELETE CASCADE
+);
+GO
+```
+
+
+
+| **Functionality**                           | **Description**                                                                                                                                                                                 | **Relevant Tables**                                                 |
+|--------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
+| **Store / Update Training Data**           | Insert new (or updated) records with features into `df3_data`.                                                                                                                                 | - `df3_data`                                                       |
+| **List / Classify Columns**                | Define each column’s type (numeric, text, time) in `columns_info`.                                                                                                                              | - `columns_info`                                                    |
+| **Create / List Test Config**              | Insert rows in `test_config` describing how you’ll pick columns or which category they belong to.                                                                                                | - `test_config`                                                     |
+| **Register Models & Hyperparams**          | Insert a record in `models` for each new model approach, store hyperparams in `model_hyperparams`.                                                                                              | - `models`, `model_hyperparams`                                     |
+| **Run Single Test (Train & Evaluate)**     | - Pick columns, model, hyperparams.<br/>- Train & evaluate performance.<br/>- Insert a row in `test_runs` for the results.<br/>- Insert multiple rows in `test_run_columns` for columns used. | - `test_runs`, `test_run_columns`, `models`, `columns_info`         |
+| **Run Batch Tests**                        | - Select multiple `test_config` rows (by category, etc.).<br/>- For each config, do the training & evaluation.<br/>- Save the result in `test_runs` / `test_run_columns`.                       | - `test_config`, `test_runs`, `test_run_columns`, `models`          |
+| **View Test Results**                      | Query `test_runs` to see past runs, metrics, times, etc. Join with `test_run_columns` to see which columns or hyperparams used.                                                                 | - `test_runs`, `test_run_columns`, `models`                         |
+| **Analyze Column Usage**                   | Join `test_run_columns` with `columns_info` to see how often each column is used in top-performing runs.                                                                                        | - `test_run_columns`, `columns_info`, `test_runs`                   |
+| **Categorize / Filter**                    | Use the `category` field in `test_config` or `test_runs` to group and filter runs or configs (e.g., “random-generated tests” vs. “manual tests”).                                               | - `test_config`, `test_runs`                                        |
+| **Maintain Model Artifacts** (Optional)    | Store file paths or URIs for serialized models in `models.model_location`.                                                                                                                      | - `models`                                                          |
+
