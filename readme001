@@ -1,0 +1,289 @@
+
+# ML Test Runner API
+
+## Project Overview
+
+This project is a FastAPI application designed to train and evaluate machine learning models using a structured data pipeline. The application leverages Pydantic, SQLAlchemy, and Alembic with a SQL Server database. It provides endpoints for:
+
+- **Data Management:** Storing and retrieving training-ready data (called **Data**) along with its column metadata (**ColumnsInfo**).
+- **Configuration Management:** Managing test configurations (**Config**) that specify how tests are executed.
+- **Model Management:** Registering machine learning models (**Models**) along with their hyperparameters (**ModelHyperparams**).
+- **Run Execution:** Executing training/evaluation runs (**Runs**) and logging which columns were used in each run (**RunColumns**).
+- **Results Analysis:** Retrieving and analyzing test run results to identify the best performing configurations.
+
+## Project Structure
+
+
+```plaintext
+your_project/
+├── app/
+│   ├── core/
+│   │   └── config.py         # Global configuration settings (env variables, etc.)
+│   ├── db/
+│   │   ├── __init__.py
+│   │   ├── models.py         # SQLAlchemy models:
+│   │   │   │── Data            (training-ready data)
+│   │   │   │── ColumnsInfo     (metadata for each data column: numeric, text, time)
+│   │   │   │── Config          (test configurations)
+│   │   │   │── Models          (registered ML models)
+│   │   │   │── ModelHyperparams (hyperparameters for each model)
+│   │   │   │── Runs            (execution results for each run)
+│   │   │   └── RunColumns      (bridge: which columns were used in a run)
+│   │   └── session.py        # SQLAlchemy session management
+│   ├── schemas/              # Pydantic models for request/response validation
+│   │   ├── __init__.py
+│   │   ├── data.py           # Schemas for Data entity
+│   │   ├── columns_info.py   # Schemas for ColumnsInfo
+│   │   ├── config.py         # Schemas for Config (test configurations)
+│   │   ├── models.py         # Schemas for Models (ML models)
+│   │   ├── model_hyperparams.py   # Schemas for ModelHyperparams
+│   │   ├── runs.py           # Schemas for Runs (test run results)
+│   │   └── run_columns.py    # Schemas for RunColumns (columns used per run)
+│   ├── crud/                 # CRUD operations for data access
+│   │   ├── __init__.py
+│   │   ├── data.py           # CRUD for Data
+│   │   ├── columns_info.py   # CRUD for ColumnsInfo
+│   │   ├── config.py         # CRUD for Config (test configurations)
+│   │   ├── models.py         # CRUD for Models (ML models)
+│   │   ├── model_hyperparams.py   # CRUD for ModelHyperparams
+│   │   ├── runs.py           # CRUD for Runs (test run results)
+│   │   └── run_columns.py    # CRUD for RunColumns (bridge table)
+│   ├── api/                  # API endpoints
+│   │   ├── __init__.py
+│   │   ├── deps.py           # Dependencies for endpoints (e.g. DB session injection)
+│   │   └── endpoints/
+│   │       ├── __init__.py
+│   │       ├── run/          # Endpoints related to run execution
+│   │       │   ├── __init__.py
+│   │       │   ├── single.py  # Endpoint to run a single test (train & evaluate)
+│   │       │   └── batch.py   # Endpoint to execute batch runs (by category or list)
+│   │       ├── config/       # Endpoints to manage test configurations
+│   │       │   ├── __init__.py
+│   │       │   ├── list.py    # Endpoint to list configurations
+│   │       │   ├── get.py     # Endpoint to retrieve a specific configuration
+│   │       │   └── generate_random.py  # Endpoint to generate random configurations
+│   │       └── models/       # Endpoints to manage ML models
+│   │           ├── __init__.py
+│   │           ├── list.py    # Endpoint to list registered models
+│   │           └── create.py  # Endpoint to create/update a model and its hyperparameters
+│   ├── main.py               # FastAPI application entrypoint
+├── alembic/                  # Database migration scripts and configuration
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/           # Migration scripts
+├── scripts/
+│   └── seed_data.py        # Script to seed initial data into the database
+├── tests/                  # Unit and integration tests
+│   ├── __init__.py
+│   ├── conftest.py         # Test configuration & fixtures
+│   ├── test_run.py         # Tests for run endpoints
+│   ├── test_config.py      # Tests for config endpoints
+│   ├── test_models.py      # Tests for model endpoints
+│   └── ...                 # Additional test files as needed
+├── .env                    # Environment variables (e.g., DATABASE_URL)
+├── alembic.ini             # Alembic configuration file
+├── pytest.ini              # Pytest configuration
+├── requirements.txt        # Project dependencies
+└── README.md               # Project documentation and overview
+
+```
+
+## Data Model
+
+The application’s data model consists of the following key entities:
+
+- **Data:** The training-ready dataset (features and optional target).
+- **ColumnsInfo:** Metadata for each column in Data (defines whether each column is numeric, text, or time).
+- **Config:** Test configurations that specify column selection strategies and categories.
+- **Models:** Registered machine learning models (name, type, storage location, active status).
+- **ModelHyperparams:** Hyperparameters for each model.
+- **Runs:** Logs of each training/evaluation run with performance metrics (accuracy, runtime, etc.).
+- **RunColumns:** A bridge table linking each run to the columns used.
+
+### Entity Relationship Diagram
+
+```mermaid
+erDiagram
+    Data {
+        INT data_id PK
+        STRING feature_1
+        STRING feature_2
+        DATETIME created_at
+        DATETIME updated_at
+    }
+    ColumnsInfo {
+        INT column_id PK
+        STRING column_name
+        STRING column_type
+    }
+    Config {
+        INT config_id PK
+        STRING description
+        STRING category
+        STRING column_selection_strategy
+    }
+    Models {
+        INT model_id PK
+        STRING model_name
+        STRING model_type
+        STRING model_location
+        BOOLEAN is_active
+    }
+    ModelHyperparams {
+        INT hyperparam_id PK
+        INT model_id FK
+        STRING param_name
+        STRING param_value
+    }
+    Runs {
+        INT run_id PK
+        DATETIME run_date
+        INT model_id FK
+        STRING hyperparams_used
+        FLOAT accuracy
+        FLOAT accuracy_top5
+        FLOAT run_time_seconds
+        STRING category
+        STRING notes
+    }
+    RunColumns {
+        INT run_columns_id PK
+        INT run_id FK
+        INT column_id FK
+    }
+    
+    ModelHyperparams ||--|| Models : "belongs to"
+    Runs ||--|| Models : "references"
+    RunColumns }o--|| Runs : "belongs to"
+    RunColumns }o--|| ColumnsInfo : "uses"
+```
+
+## API Endpoints
+
+The API exposes several endpoints grouped by functionality:
+
+1. **Run Endpoints**
+   - `POST /run/single`: Execute a single test run (train & evaluate) with specified model, hyperparameters, and column IDs.
+   - `POST /run/batch`: Execute multiple test runs based on a category or list of configurations.
+   - `GET /run/{id}`: Retrieve details of a specific run.
+   - `GET /run`: List all test runs with optional filtering.
+
+2. **Config Endpoints**
+   - `GET /config/list`: List all test configurations.
+   - `GET /config/{id}`: Retrieve details of a specific configuration.
+   - `POST /config/generate_random`: Generate random test configurations based on available column metadata.
+
+3. **Model Endpoints**
+   - `GET /models`: List all registered models.
+   - `POST /models`: Create or update a model and its hyperparameters.
+
+For a complete list of endpoints and their usage, refer to the interactive API documentation available at `/docs` once the application is running.
+
+## Iterations Roadmap
+
+Below is a prioritized roadmap outlining the iterations needed to build the system, including the files to create for each layer, dependencies, and associated tests:
+
+| **Iteration** | **Functionality**                                          | **Files / Layers to Create**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | **Dependencies / Notes**                                                                                                                                                              | **Associated Tests**                    |
+|---------------|-------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------|
+| **1**         | **Data & Columns Setup**                                   | **DB Layer:**<br>- `app/db/models.py`: Define **Data** and **ColumnsInfo** models<br/><br>**CRUD Layer:**<br>- `app/crud/data.py`<br>- `app/crud/columns_info.py`<br/><br>**Schemas Layer:**<br>- `app/schemas/data.py`<br>- `app/schemas/columns_info.py`<br/><br>**Scripts:**<br>- `scripts/seed_data.py` (to load initial data)                                                            | Foundational layer. Without training data (**Data**) and column metadata (**ColumnsInfo**), no training or testing can occur.                                      | `tests/test_data.py`, `tests/test_columns_info.py` |
+| **2**         | **Model Registration & Hyperparameter Setup**              | **DB Layer:**<br>- `app/db/models.py`: Define **Models** and **ModelHyperparams** models<br/><br>**CRUD Layer:**<br>- `app/crud/models.py`<br>- `app/crud/model_hyperparams.py`<br/><br>**Schemas Layer:**<br>- `app/schemas/models.py`<br>- `app/schemas/model_hyperparams.py`<br/><br>**API Endpoints:**<br>- `app/api/endpoints/models/list.py`<br>- `app/api/endpoints/models/create.py`                              | Requires Iteration 1 to be complete. Models and hyperparameters are essential for running any training/test runs.                                                                    | `tests/test_models.py`                  |
+| **3**         | **Config Endpoints**                                      | **DB Layer:**<br>- `app/db/models.py`: Define **Config** model<br/><br>**CRUD Layer:**<br>- `app/crud/config.py`<br/><br>**Schemas Layer:**<br>- `app/schemas/config.py`<br/><br>**API Endpoints:**<br>- `app/api/endpoints/config/list.py`<br>- `app/api/endpoints/config/get.py`<br>- `app/api/endpoints/config/generate_random.py`                                                     | Depends on Iterations 1 & 2. The **Config** entity uses available column metadata and model info to plan test runs.                                                                 | `tests/test_config.py`                  |
+| **4**         | **Run Execution Endpoints**                                | **DB Layer:**<br>- `app/db/models.py`: Define **Runs** and **RunColumns** models<br/><br>**CRUD Layer:**<br>- `app/crud/runs.py`<br>- `app/crud/run_columns.py`<br/><br>**Schemas Layer:**<br>- `app/schemas/runs.py`<br>- `app/schemas/run_columns.py`<br/><br>**API Endpoints:**<br>- `app/api/endpoints/run/single.py`<br>- `app/api/endpoints/run/batch.py`                   | Requires that **Data**, **ColumnsInfo**, **Models**, and **Config** are in place (Iterations 1–3). Run execution uses configurations to select columns, train models, and log results. | `tests/test_run_single.py`, `tests/test_run_batch.py` |
+| **5**         | **Run Results Analysis & Retrieval Endpoints**             | **API Endpoints:**<br>- `app/api/endpoints/run/list.py` (list all runs)<br>- `app/api/endpoints/run/get.py` (retrieve run details)<br/><br>**(Optional: Update CRUD/Schema layers if additional fields are needed)**                                                                                                                        | Depends on Iteration 4. Enables retrieval and analysis of past run results for performance monitoring and improvement.                                                             | `tests/test_run_analysis.py`            |
+
+### How to Read This Table
+
+1. **Iteration 1: Data & Columns Setup**  
+   - **Goal:** Establish the foundational data by creating the `Data` table and defining the metadata in `ColumnsInfo`.  
+   - **Files:** Define models, CRUD operations, and schemas; seed the database with initial data.  
+   - **Tests:** Validate that data insertion and retrieval work as expected.
+
+2. **Iteration 2: Model Registration & Hyperparameter Setup**  
+   - **Goal:** Register ML models and their associated hyperparameters.  
+   - **Files:** Create models, CRUD operations, schemas, and basic endpoints for model management.  
+   - **Tests:** Ensure that models can be created, updated, and listed correctly.
+
+3. **Iteration 3: Config Endpoints**  
+   - **Goal:** Create endpoints to manage test configurations, which specify how tests will be executed.  
+   - **Files:** Create models, CRUD operations, schemas, and endpoints for configuration (list, get, generate random).  
+   - **Tests:** Verify that configurations can be created, viewed, and generated randomly.
+
+4. **Iteration 4: Run Execution Endpoints**  
+   - **Goal:** Implement endpoints to execute test runs (both single and batch) and log the results along with the used columns.  
+   - **Files:** Develop models, CRUD operations, schemas, and endpoints for run execution.  
+   - **Tests:** Validate that a test run executes, returns correct metrics, and logs the run details.
+
+5. **Iteration 5: Run Results Analysis & Retrieval Endpoints**  
+   - **Goal:** Provide endpoints to list and retrieve details of past test runs for analysis.  
+   - **Files:** Create endpoints for retrieving run results.  
+   - **Tests:** Ensure that run details can be queried and displayed correctly.
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11
+- SQL Server instance (configure connection string in the `.env` file)
+- Virtual environment tool (venv, pipenv, or poetry)
+
+### Installation
+
+1. **Clone the repository:**
+
+   ```bash
+   git clone https://github.com/yourusername/your_project.git
+   cd your_project
+   ```
+
+2. **Install dependencies:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Configure environment variables:**
+
+   Create or update the `.env` file with your SQL Server connection string:
+   ```env
+   DATABASE_URL=sqlserver://username:password@host:port/database
+   ```
+
+4. **Run Alembic migrations:**
+
+   ```bash
+   alembic upgrade head
+   ```
+
+5. **(Optional) Seed initial data:**
+
+   ```bash
+   python scripts/seed_data.py
+   ```
+
+### Running the Application
+
+Start the FastAPI application using Uvicorn:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Access the interactive API documentation at: `http://localhost:8000/docs`
+
+## Running Tests
+
+Run the test suite with:
+
+```bash
+pytest
+```
+
+## Acknowledgements
+
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [Pydantic](https://pydantic-docs.helpmanual.io/)
+- [SQLAlchemy](https://www.sqlalchemy.org/)
+- [Alembic](https://alembic.sqlalchemy.org/)
+- SQL Server
+```
+
