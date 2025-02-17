@@ -1,0 +1,684 @@
+- **Dataset:** Metadata for each CSV file.
+- **DatasetColumns:** Data dictionary (columns metadata) for each dataset.
+- **DatasetRecords:** Each CSV row stored as a JSON blob.
+- **Transformation:** Reusable transformation definitions.
+
+---
+
+### 1. DB Models
+
+**File:** `app/db/models.py`
+
+```python
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, func
+from sqlalchemy.orm import relationship
+from sqlalchemy.ext.declarative import declarative_base
+
+Base = declarative_base()
+
+class Dataset(Base):
+    """
+    Represents an uploaded CSV file.
+    """
+    __tablename__ = "dataset"
+
+    dataset_id = Column(Integer, primary_key=True, index=True)
+    file_name = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    description = Column(String(500), nullable=True)
+
+    # Relationships
+    columns = relationship("DatasetColumns", back_populates="dataset", cascade="all, delete-orphan")
+    records = relationship("DatasetRecords", back_populates="dataset", cascade="all, delete-orphan")
+
+class DatasetColumns(Base):
+    """
+    Stores metadata for each column in a CSV file.
+    For derived columns, transformation_id references a reusable transformation.
+    """
+    __tablename__ = "dataset_columns"
+
+    column_id = Column(Integer, primary_key=True, index=True)
+    dataset_id = Column(Integer, ForeignKey("dataset.dataset_id"), nullable=False)
+    column_name = Column(String(255), nullable=False)
+    column_type = Column(String(50), nullable=False)  # e.g., "numeric", "text", "time"
+    transformation_id = Column(Integer, ForeignKey("transformation.transformation_id"), nullable=True)
+
+    # Relationships
+    dataset = relationship("Dataset", back_populates="columns")
+    transformation = relationship("Transformation", back_populates="columns")
+
+class DatasetRecords(Base):
+    """
+    Stores each CSV row as a JSON blob.
+    For SQL Server, JSON is stored as text (e.g., NVARCHAR(MAX)).
+    """
+    __tablename__ = "dataset_records"
+
+    record_id = Column(Integer, primary_key=True, index=True)
+    dataset_id = Column(Integer, ForeignKey("dataset.dataset_id"), nullable=False)
+    data = Column(Text, nullable=False)  # JSON string
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    # Relationships
+    dataset = relationship("Dataset", back_populates="records")
+
+class Transformation(Base):
+    """
+    Stores reusable transformation definitions.
+    """
+    __tablename__ = "transformation"
+
+    transformation_id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    expression = Column(String(500), nullable=False)  # e.g., "age + 10"
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    # Relationships
+    columns = relationship("DatasetColumns", back_populates="transformation")
+```
+
+---
+
+### 2. Pydantic Schemas
+
+#### a. Dataset Schemas
+
+**File:** `app/schemas/dataset.py`
+
+```python
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+class DatasetBase(BaseModel):
+    file_name: str
+    description: Optional[str] = None
+
+class DatasetCreate(DatasetBase):
+    pass
+
+class Dataset(DatasetBase):
+    dataset_id: int
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+```
+
+---
+
+#### b. DatasetColumns Schemas
+
+**File:** `app/schemas/dataset_columns.py`
+
+```python
+from pydantic import BaseModel
+from typing import Optional
+
+class DatasetColumnsBase(BaseModel):
+    column_name: str
+    column_type: str  # e.g., "numeric", "text", "time"
+    transformation_id: Optional[int] = None
+
+class DatasetColumnsCreate(DatasetColumnsBase):
+    pass
+
+class DatasetColumnsUpdate(DatasetColumnsBase):
+    pass
+
+class DatasetColumns(DatasetColumnsBase):
+    column_id: int
+
+    class Config:
+        orm_mode = True
+```
+
+---
+
+#### c. DatasetRecords Schemas
+
+**File:** `app/schemas/dataset_records.py`
+
+```python
+from pydantic import BaseModel
+from datetime import datetime
+
+class DatasetRecordsBase(BaseModel):
+    data: str  # JSON string
+
+class DatasetRecordsCreate(DatasetRecordsBase):
+    pass
+
+class DatasetRecords(DatasetRecordsBase):
+    record_id: int
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+```
+
+---
+
+#### d. Transformation Schemas
+
+**File:** `app/schemas/transformation.py`
+
+```python
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+class TransformationBase(BaseModel):
+    name: str
+    expression: str
+    description: Optional[str] = None
+
+class TransformationCreate(TransformationBase):
+    pass
+
+class Transformation(TransformationBase):
+    transformation_id: int
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+```
+
+
+
+1. **CRUD Services** for each new entity:
+   - `Dataset`
+   - `DatasetColumns`
+   - `DatasetRecords`
+   - `Transformation`
+2. **API Endpoints** to upload a CSV file (which processes the file, creates a new dataset, registers column metadata, and stores records) and to create a new derived (transformation) column.
+
+---
+
+## 1. CRUD Layer
+
+### a. Dataset CRUD
+**File:** `app/crud/dataset.py`
+```python
+# app/crud/dataset.py
+
+from sqlalchemy.orm import Session
+from app.db import models
+from app.schemas import dataset as dataset_schema
+
+def get_dataset(db: Session, dataset_id: int):
+    return db.query(models.Dataset).filter(models.Dataset.dataset_id == dataset_id).first()
+
+def get_all_datasets(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.Dataset).offset(skip).limit(limit).all()
+
+def create_dataset(db: Session, dataset_in: dataset_schema.DatasetCreate):
+    dataset = models.Dataset(**dataset_in.dict())
+    db.add(dataset)
+    db.commit()
+    db.refresh(dataset)
+    return dataset
+
+def update_dataset(db: Session, dataset_id: int, dataset_in: dataset_schema.DatasetUpdate):
+    dataset = get_dataset(db, dataset_id)
+    if dataset:
+        for field, value in dataset_in.dict(exclude_unset=True).items():
+            setattr(dataset, field, value)
+        db.commit()
+        db.refresh(dataset)
+    return dataset
+
+def delete_dataset(db: Session, dataset_id: int):
+    dataset = get_dataset(db, dataset_id)
+    if dataset:
+        db.delete(dataset)
+        db.commit()
+    return dataset
+```
+
+### b. DatasetColumns CRUD
+**File:** `app/crud/dataset_columns.py`
+```python
+# app/crud/dataset_columns.py
+
+from sqlalchemy.orm import Session
+from app.db import models
+from app.schemas import dataset_columns as ds_columns_schema
+
+def get_column(db: Session, column_id: int):
+    return db.query(models.DatasetColumns).filter(models.DatasetColumns.column_id == column_id).first()
+
+def get_columns_by_dataset(db: Session, dataset_id: int, skip: int = 0, limit: int = 100):
+    return db.query(models.DatasetColumns).filter(models.DatasetColumns.dataset_id == dataset_id).offset(skip).limit(limit).all()
+
+def create_column(db: Session, column_in: ds_columns_schema.DatasetColumnsCreate, dataset_id: int):
+    column = models.DatasetColumns(dataset_id=dataset_id, **column_in.dict())
+    db.add(column)
+    db.commit()
+    db.refresh(column)
+    return column
+
+def update_column(db: Session, column_id: int, column_in: ds_columns_schema.DatasetColumnsUpdate):
+    column = get_column(db, column_id)
+    if column:
+        for field, value in column_in.dict(exclude_unset=True).items():
+            setattr(column, field, value)
+        db.commit()
+        db.refresh(column)
+    return column
+
+def delete_column(db: Session, column_id: int):
+    column = get_column(db, column_id)
+    if column:
+        db.delete(column)
+        db.commit()
+    return column
+```
+
+### c. DatasetRecords CRUD
+**File:** `app/crud/dataset_records.py`
+```python
+# app/crud/dataset_records.py
+
+from sqlalchemy.orm import Session
+from app.db import models
+from app.schemas import dataset_records as ds_records_schema
+
+def get_record(db: Session, record_id: int):
+    return db.query(models.DatasetRecords).filter(models.DatasetRecords.record_id == record_id).first()
+
+def get_records_by_dataset(db: Session, dataset_id: int, skip: int = 0, limit: int = 1000):
+    return db.query(models.DatasetRecords).filter(models.DatasetRecords.dataset_id == dataset_id).offset(skip).limit(limit).all()
+
+def create_record(db: Session, record_in: ds_records_schema.DatasetRecordsCreate, dataset_id: int):
+    record = models.DatasetRecords(dataset_id=dataset_id, **record_in.dict())
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+def update_record(db: Session, record_id: int, record_in: ds_records_schema.DatasetRecordsCreate):
+    record = get_record(db, record_id)
+    if record:
+        for field, value in record_in.dict(exclude_unset=True).items():
+            setattr(record, field, value)
+        db.commit()
+        db.refresh(record)
+    return record
+
+def delete_record(db: Session, record_id: int):
+    record = get_record(db, record_id)
+    if record:
+        db.delete(record)
+        db.commit()
+    return record
+```
+
+### d. Transformation CRUD
+**File:** `app/crud/transformation.py`
+```python
+# app/crud/transformation.py
+
+from sqlalchemy.orm import Session
+from app.db import models
+from app.schemas import transformation as transformation_schema
+
+def get_transformation(db: Session, transformation_id: int):
+    return db.query(models.Transformation).filter(models.Transformation.transformation_id == transformation_id).first()
+
+def get_transformation_by_expression(db: Session, expression: str):
+    return db.query(models.Transformation).filter(models.Transformation.expression == expression).first()
+
+def get_all_transformations(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.Transformation).offset(skip).limit(limit).all()
+
+def create_transformation(db: Session, transformation_in: transformation_schema.TransformationCreate):
+    transformation = models.Transformation(**transformation_in.dict())
+    db.add(transformation)
+    db.commit()
+    db.refresh(transformation)
+    return transformation
+
+def update_transformation(db: Session, transformation_id: int, transformation_in: transformation_schema.TransformationCreate):
+    transformation = get_transformation(db, transformation_id)
+    if transformation:
+        for field, value in transformation_in.dict(exclude_unset=True).items():
+            setattr(transformation, field, value)
+        db.commit()
+        db.refresh(transformation)
+    return transformation
+
+def delete_transformation(db: Session, transformation_id: int):
+    transformation = get_transformation(db, transformation_id)
+    if transformation:
+        db.delete(transformation)
+        db.commit()
+    return transformation
+```
+
+---
+
+## 2. API Endpoints
+
+### a. CSV Upload Endpoint
+**File:** `app/api/endpoints/dataset_upload.py`
+```python
+# app/api/endpoints/dataset_upload.py
+
+import io
+import json
+import pandas as pd
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.db.session import get_db
+from app.schemas import dataset as dataset_schema, dataset_columns as ds_columns_schema, dataset_records as ds_records_schema
+from app.crud import dataset as dataset_crud, dataset_columns as ds_columns_crud, dataset_records as ds_records_crud
+from app.utils.csv_processor import process_csv, categorize_column
+
+router = APIRouter()
+
+@router.post("/upload", summary="Upload CSV file and process dataset")
+async def upload_csv(file: UploadFile = File(...), description: str = None, db: Session = Depends(get_db)):
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a CSV file.")
+
+    contents = await file.read()
+    try:
+        df = process_csv(contents)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error processing CSV: {e}")
+
+    # Create a new Dataset record
+    dataset_in = dataset_schema.DatasetCreate(file_name=file.filename, description=description)
+    dataset = dataset_crud.create_dataset(db, dataset_in)
+
+    # Process and save column metadata
+    for col in df.columns:
+        col_type = categorize_column(df[col])
+        col_in = ds_columns_schema.DatasetColumnsCreate(column_name=col, column_type=col_type)
+        ds_columns_crud.create_column(db, col_in, dataset_id=dataset.dataset_id)
+
+    # Process and save each row as JSON
+    records_created = 0
+    for _, row in df.iterrows():
+        row_dict = row.to_dict()
+        record_in = ds_records_schema.DatasetRecordsCreate(data=json.dumps(row_dict))
+        ds_records_crud.create_record(db, record_in, dataset_id=dataset.dataset_id)
+        records_created += 1
+
+    return {"message": "CSV uploaded and processed successfully",
+            "dataset_id": dataset.dataset_id,
+            "records_created": records_created}
+```
+
+### b. Transformation Endpoint
+**File:** `app/api/endpoints/dataset_transform.py`
+```python
+# app/api/endpoints/dataset_transform.py
+
+import json
+import pandas as pd
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.db.session import get_db
+from app.db import models
+from app.schemas import dataset_columns as ds_columns_schema, transformation as transformation_schema
+from app.crud import dataset_records as ds_records_crud, transformation as transformation_crud, dataset_columns as ds_columns_crud
+from app.utils.csv_processor import apply_transformation
+
+router = APIRouter()
+
+@router.post("/transform", summary="Create a new derived column using a transformation")
+def create_transformation_column(
+    dataset_id: int,
+    new_column_name: str,
+    transformation_expr: str,  # e.g., "float(age) + 10" or "salary * 1.1"
+    transformation_name: str = None,  # Optional name for the transformation
+    db: Session = Depends(get_db)
+):
+    # Retrieve dataset records
+    records = ds_records_crud.get_records_by_dataset(db, dataset_id)
+    if not records:
+        raise HTTPException(status_code=404, detail="Dataset not found or has no records.")
+
+    # Convert records to DataFrame
+    data_list = []
+    record_ids = []
+    for record in records:
+        data_list.append(json.loads(record.data))
+        record_ids.append(record.record_id)
+    df = pd.DataFrame(data_list)
+
+    # Apply transformation to create new column
+    try:
+        df[new_column_name] = df.eval(transformation_expr)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error applying transformation: {e}")
+
+    # Determine the type of the new column (simple heuristic)
+    new_col_type = "numeric"
+    try:
+        pd.to_numeric(df[new_column_name].dropna())
+    except Exception:
+        new_col_type = "text"
+
+    # Update each record with the new column value
+    for rec_id, new_val in zip(record_ids, df[new_column_name]):
+        record = ds_records_crud.get_record(db, rec_id)
+        record_data = json.loads(record.data)
+        record_data[new_column_name] = new_val
+        record.data = json.dumps(record_data)
+        db.add(record)
+    db.commit()
+
+    # Check if transformation already exists by expression
+    transformation = transformation_crud.get_transformation_by_expression(db, transformation_expr)
+    if not transformation:
+        trans_in = transformation_schema.TransformationCreate(
+            name=transformation_name or f"Transformation for {new_column_name}",
+            expression=transformation_expr,
+            description=f"Derived column {new_column_name} using expression: {transformation_expr}"
+        )
+        transformation = transformation_crud.create_transformation(db, trans_in)
+
+    # Create a new column in DatasetColumns linking to this transformation
+    col_in = ds_columns_schema.DatasetColumnsCreate(
+        column_name=new_column_name,
+        column_type=new_col_type,
+        transformation_id=transformation.transformation_id
+    )
+    new_column = ds_columns_crud.create_column(db, col_in, dataset_id=dataset_id)
+
+    return {
+        "message": f"Derived column '{new_column_name}' created successfully.",
+        "column": {
+            "column_id": new_column.column_id,
+            "column_name": new_column.column_name,
+            "column_type": new_column.column_type,
+            "transformation_id": new_column.transformation_id,
+        },
+        "transformation": {
+            "transformation_id": transformation.transformation_id,
+            "name": transformation.name,
+            "expression": transformation.expression,
+            "description": transformation.description,
+        }
+    }
+```
+
+---
+
+## 3. Main Application Update
+
+Update your main file to include the new endpoints.
+
+**File:** `app/main.py`
+```python
+# app/main.py
+
+from fastapi import FastAPI
+from app.api.endpoints import (
+    health,                # Your existing health check endpoint
+    dataset_upload,        # CSV upload endpoint
+    dataset,               # Endpoints to list/get dataset metadata
+    dataset_columns,       # Endpoints to list/get dataset columns
+    dataset_transform      # Transformation endpoint
+)
+
+app = FastAPI(title="ML Test Runner API")
+
+# Health endpoint
+app.include_router(health.router, prefix="/health", tags=["Health"])
+# Dataset endpoints (upload and listing)
+app.include_router(dataset_upload.router, prefix="/dataset", tags=["Dataset Upload"])
+app.include_router(dataset.router, prefix="/dataset", tags=["Dataset"])
+app.include_router(dataset_columns.router, prefix="/columns", tags=["Dataset Columns"])
+# Data transformation endpoint
+app.include_router(dataset_transform.router, prefix="/dataset", tags=["Dataset Transformation"])
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+```
+
+---
+
+### Example Test File for CSV Upload Endpoint
+
+**File:** `tests/test_dataset_upload.py`
+
+```python
+import io
+import pytest
+from fastapi.testclient import TestClient
+from app.main import app
+from app.db.models import Base
+from app.db.session import SessionLocal
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+# Use an in-memory SQLite database for testing
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Override the get_db dependency
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[SessionLocal] = override_get_db
+
+client = TestClient(app)
+
+# Create the tables before each test and drop them after
+@pytest.fixture(autouse=True)
+def setup_db():
+    Base.metadata.create_all(bind=engine)
+    yield
+    Base.metadata.drop_all(bind=engine)
+
+def test_upload_csv():
+    csv_content = "age,salary,department\n32,55000,Sales\n28,48000,Marketing\n"
+    file = io.BytesIO(csv_content.encode("utf-8"))
+    
+    response = client.post(
+        "/dataset/upload",
+        files={"file": ("test.csv", file, "text/csv")},
+        data={"description": "Test CSV upload"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "dataset_id" in data
+    assert data["records_created"] == 2
+```
+
+---
+
+### Example Test File for Transformation Endpoint
+
+**File:** `tests/test_dataset_transform.py`
+
+```python
+import io
+import json
+import pytest
+from fastapi.testclient import TestClient
+from app.main import app
+from app.db.models import Base
+from app.db.session import SessionLocal
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+# Use an in-memory SQLite database for testing
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Override the get_db dependency
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[SessionLocal] = override_get_db
+
+client = TestClient(app)
+
+@pytest.fixture(autouse=True)
+def setup_db():
+    Base.metadata.create_all(bind=engine)
+    yield
+    Base.metadata.drop_all(bind=engine)
+
+def test_transform_endpoint():
+    # First, upload a CSV to create a dataset
+    csv_content = "age,salary\n32,55000\n28,48000\n"
+    file = io.BytesIO(csv_content.encode("utf-8"))
+    upload_response = client.post(
+        "/dataset/upload",
+        files={"file": ("test.csv", file, "text/csv")},
+        data={"description": "Dataset for transformation test"}
+    )
+    assert upload_response.status_code == 200
+    upload_data = upload_response.json()
+    dataset_id = upload_data["dataset_id"]
+    
+    # Now, call the transformation endpoint to create a new derived column
+    transform_payload = {
+        "dataset_id": dataset_id,
+        "new_column_name": "age_plus_5",
+        "transformation_expr": "age + 5",
+        "transformation_name": "Add 5 to Age"
+    }
+    transform_response = client.post("/dataset/transform", json=transform_payload)
+    assert transform_response.status_code == 200
+    transform_data = transform_response.json()
+    assert "column" in transform_data
+    assert transform_data["column"]["column_name"] == "age_plus_5"
+    
+    # Optionally, check that dataset records have been updated with the new column
+    # You might query /dataset endpoint or check the underlying DB state.
+```
+
+---
+
+### Running Tests with Coverage
+
+1. **Install Pytest and Coverage:**  
+   ```bash
+   pip install pytest coverage
+   ```
+
+2. **Run Your Tests with Coverage:**  
+   ```bash
+   coverage run -m pytest
+   coverage report -m
+   ```
