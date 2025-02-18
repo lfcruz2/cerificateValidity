@@ -1,57 +1,25 @@
-
-```python
-# app/utils/csv_processor.py
-
-import io
-import pandas as pd
-
-def process_csv(file_contents: bytes) -> pd.DataFrame:
+def apply_transformation(df: pd.DataFrame, new_column_name: str, transformation_expr: str) -> pd.DataFrame:
     """
-    Processes CSV file contents:
-    - Decodes the file contents.
-    - Reads CSV data into a Pandas DataFrame.
-    - Drops columns that are completely empty (all NaN or only empty strings).
+    Applies a transformation to the DataFrame to create a new column.
     
-    Returns:
-        pd.DataFrame: The cleaned DataFrame.
-    """
-    # Decode the file contents into a string
-    csv_str = file_contents.decode("utf-8")
-    
-    # Read the CSV data into a DataFrame
-    df = pd.read_csv(io.StringIO(csv_str))
-    
-    # Drop columns that are entirely NaN
-    df.dropna(axis=1, how='all', inplace=True)
-    
-    # Drop columns that contain only empty strings
-    df = df.loc[:, df.apply(lambda col: col.astype(str).str.strip().replace("", pd.NA).notna().any())]
-    
-    return df
-
-def categorize_column(series: pd.Series) -> str:
-    """
-    Categorizes a pandas Series based on its contents.
-    
-    Attempts to convert the series to numeric; if successful, returns "numeric".
-    If not, attempts to convert to datetime; if successful, returns "time".
-    Otherwise, returns "text".
+    The transformation_expr is a string that will be evaluated on the DataFrame using pandas.eval.
+    For example, if your DataFrame has columns "age" and "salary", you might pass:
+        transformation_expr = "age + 10"
+    to create a new column with each value equal to the corresponding "age" plus 10.
     
     Args:
-        series (pd.Series): The data column to categorize.
+        df (pd.DataFrame): The DataFrame to transform.
+        new_column_name (str): The name of the new column to create.
+        transformation_expr (str): The transformation expression to evaluate.
     
     Returns:
-        str: The category of the column ("numeric", "time", or "text").
+        pd.DataFrame: The DataFrame with the new derived column added.
+    
+    Raises:
+        ValueError: If there is an error applying the transformation.
     """
     try:
-        pd.to_numeric(series.dropna())
-        return "numeric"
-    except Exception:
-        pass
-    try:
-        pd.to_datetime(series.dropna())
-        return "time"
-    except Exception:
-        pass
-    return "text"
-```
+        df[new_column_name] = df.eval(transformation_expr)
+    except Exception as e:
+        raise ValueError(f"Error applying transformation: {e}")
+    return df
