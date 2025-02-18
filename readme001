@@ -1,115 +1,57 @@
-Below is an example implementation for the requested files:
-
----
-
-### **1. `app/db/session.py`**
 
 ```python
-# app/db/session.py
+# app/utils/csv_processor.py
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from app.core.config import DATABASE_URL  # Make sure DATABASE_URL is defined in app/core/config.py
+import io
+import pandas as pd
 
-# Create the SQLAlchemy engine using the DATABASE_URL
-engine = create_engine(DATABASE_URL, echo=True)
+def process_csv(file_contents: bytes) -> pd.DataFrame:
+    """
+    Processes CSV file contents:
+    - Decodes the file contents.
+    - Reads CSV data into a Pandas DataFrame.
+    - Drops columns that are completely empty (all NaN or only empty strings).
+    
+    Returns:
+        pd.DataFrame: The cleaned DataFrame.
+    """
+    # Decode the file contents into a string
+    csv_str = file_contents.decode("utf-8")
+    
+    # Read the CSV data into a DataFrame
+    df = pd.read_csv(io.StringIO(csv_str))
+    
+    # Drop columns that are entirely NaN
+    df.dropna(axis=1, how='all', inplace=True)
+    
+    # Drop columns that contain only empty strings
+    df = df.loc[:, df.apply(lambda col: col.astype(str).str.strip().replace("", pd.NA).notna().any())]
+    
+    return df
 
-# Create a configured "SessionLocal" class
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Dependency to be used in FastAPI endpoints
-def get_db():
-    db = SessionLocal()
+def categorize_column(series: pd.Series) -> str:
+    """
+    Categorizes a pandas Series based on its contents.
+    
+    Attempts to convert the series to numeric; if successful, returns "numeric".
+    If not, attempts to convert to datetime; if successful, returns "time".
+    Otherwise, returns "text".
+    
+    Args:
+        series (pd.Series): The data column to categorize.
+    
+    Returns:
+        str: The category of the column ("numeric", "time", or "text").
+    """
     try:
-        yield db
-    finally:
-        db.close()
-```
-
----
-
-### **2. `app/api/endpoints/health.py`**
-
-```python
-# app/api/endpoints/health.py
-
-from fastapi import APIRouter
-
-router = APIRouter()
-
-@router.get("/", summary="Health Check", response_description="Service is healthy")
-def health_check():
-    return {"status": "OK"}
-```
-
----
-
-### **3. `app/api/endpoints/dataset.py`**
-
-This file handles listing and retrieving dataset metadata.
-
-```python
-# app/api/endpoints/dataset.py
-
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from app.db.session import get_db
-from app.crud import dataset as dataset_crud
-from app.schemas import dataset as dataset_schema
-
-router = APIRouter()
-
-@router.get("/", response_model=list(dataset_schema.Dataset))
-def list_datasets(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    datasets = dataset_crud.get_all_datasets(db, skip=skip, limit=limit)
-    return datasets
-
-@router.get("/{dataset_id}", response_model=dataset_schema.Dataset)
-def get_dataset(dataset_id: int, db: Session = Depends(get_db)):
-    dataset = dataset_crud.get_dataset(db, dataset_id)
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    return dataset
-```
-
----
-
-### **4. `app/api/endpoints/dataset_columns.py`**
-
-This file handles listing column metadata for a given dataset.
-
-```python
-# app/api/endpoints/dataset_columns.py
-
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from app.db.session import get_db
-from app.crud import dataset_columns as ds_columns_crud
-from app.schemas import dataset_columns as ds_columns_schema
-
-router = APIRouter()
-
-@router.get("/dataset/{dataset_id}", response_model=list(ds_columns_schema.DatasetColumns))
-def list_dataset_columns(dataset_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    columns = ds_columns_crud.get_columns_by_dataset(db, dataset_id, skip=skip, limit=limit)
-    if not columns:
-        raise HTTPException(status_code=404, detail="No columns found for this dataset")
-    return columns
-```
-
----
-
-### **5. `requirements.txt`**
-
-Below is an example `requirements.txt` file listing the core packages for your project:
-
-```plaintext
-fastapi
-uvicorn
-sqlalchemy
-python-dotenv
-pydantic
-pandas
-pytest
-coverage
+        pd.to_numeric(series.dropna())
+        return "numeric"
+    except Exception:
+        pass
+    try:
+        pd.to_datetime(series.dropna())
+        return "time"
+    except Exception:
+        pass
+    return "text"
 ```
