@@ -1,0 +1,35 @@
+sequenceDiagram
+    %% Rectangle 1: OAuth2 Authorization Flow (Steps 1, 2, 3)
+    rect rgb(191, 223, 255)
+      participant U as User
+      participant F as React Next App
+      participant A as Microsoft OAuth2 Service
+      U->>F: Access portal
+      F->>A: Redirect to /authorize\n(client_id, redirect_uri, scope,\nresponse_type=code, response_mode=query)
+      A->>U: Show login page\n(requests email & password)
+      U->>A: Submit credentials
+      A->>U: On success, redirect to F\nwith authorization code in URL
+      U->>F: Arrive at portal with code
+    end
+
+    %% Rectangle 2: Client Credential Token Request (Internal Service)
+    rect rgb(191, 223, 255)
+      participant IS as Internal Auth Service
+      F->>IS: Request client credential token
+      IS-->>F: Return client credential JWT token
+    end
+
+    %% Rectangle 3: Token Exchange & Verification (Steps 4, 5, 6)
+    rect rgb(191, 223, 255)
+      participant D as Discovery Service
+      participant B as Application Backend
+      F->>A: POST to /token\n(client_id, client_secret,\ngrant_type=authorization_code,\ncode, redirect_uri, scope)
+      A-->>F: Return JWT tokens\n(id_token, access_token, etc.)
+      F->>D: GET /discovery/v2.0/keys\n(with tenant ID)
+      D-->>F: Return public keys (n, e, etc.)
+      F->>F: Verify id_token using public key
+      F->>B: Send user info (employee ID) & client credential token
+      B-->>F: Validate role & entitlement grant access
+    end
+
+    Note right of F: All future communications\nbetween the backend and frontend\nmust include the client credential token
