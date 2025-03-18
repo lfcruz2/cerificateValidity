@@ -1,163 +1,204 @@
-
----
-
-### Additional Useful Parameters for `pd.read_csv()`
-
-Pandas’ `read_csv()` function provides a wide range of configuration options to handle various CSV formats and quirks. Besides the parameters we’ve already included (like `sep`, `encoding`, and `header`), here are several other useful parameters you might consider exposing in your interface:
-
-- **`skiprows`**  
-  Allows you to skip a specified number of rows (or a list of row indices) at the beginning of the file. This is useful if your CSV has metadata or header information in the first few rows.
-
-- **`index_col`**  
-  Enables you to specify which column (or columns) should be used as the index of the DataFrame. This can be helpful if the CSV contains a unique identifier that you want to use as the DataFrame index.
-
-- **`usecols`**  
-  Lets you read only a subset of columns. This is handy when you know that only a few columns are needed, which can improve performance for large CSV files.
-
-- **`dtype`**  
-  You can enforce specific data types for columns. This is particularly useful for avoiding common pitfalls like treating numeric data as strings.
-
-- **`na_values`**  
-  Provides additional strings that should be recognized as NA/NaN. This is useful if your data uses specific placeholders for missing values (e.g., "NA", "n/a", or even custom values).
-
-- **`skip_blank_lines`**  
-  Decides whether blank lines should be skipped (set to True by default). Sometimes CSVs might have extra empty lines that you’d like to ignore.
-
-- **`quotechar` & `escapechar`**  
-  These parameters help manage how quoted fields are handled, which is beneficial if your CSV contains fields with embedded separators or special characters.
-
-- **`comment`**  
-  If your CSV contains comments (lines starting with a specific character), this parameter lets you specify that character so those lines are ignored.
-
-- **`skipinitialspace`**  
-  Strips extra whitespace following delimiters. This is often useful in cases where your CSV might have been formatted with inconsistent spacing.
-
----
-
-### Example: Extending the GUI with Additional Options
-
-Here’s an updated version of our Tkinter interface that adds fields for a few extra parameters:
-
-```python
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import pandas as pd
+import json
+import bz2
+import zipfile
+import os
 
-def convert_csv_to_json():
-    csv_file_path = filedialog.askopenfilename(
+# ---------- Conversion Functions ----------
+
+def csv_to_json():
+    csv_file = filedialog.askopenfilename(
         title="Select CSV File", filetypes=(("CSV Files", "*.csv"),)
     )
-    if not csv_file_path:
+    if not csv_file:
         return
-
-    json_file_path = filedialog.asksaveasfilename(
+    json_file = filedialog.asksaveasfilename(
         title="Save JSON File", defaultextension=".json", filetypes=(("JSON Files", "*.json"),)
     )
-    if not json_file_path:
+    if not json_file:
+        return
+    try:
+        df = pd.read_csv(csv_file)
+        df.to_json(json_file, orient='records', indent=4)
+        messagebox.showinfo("Success", "CSV successfully converted to JSON!")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error: {str(e)}")
+
+def json_to_csv():
+    json_file = filedialog.askopenfilename(
+        title="Select JSON File", filetypes=(("JSON Files", "*.json"),)
+    )
+    if not json_file:
+        return
+    csv_file = filedialog.asksaveasfilename(
+        title="Save CSV File", defaultextension=".csv", filetypes=(("CSV Files", "*.csv"),)
+    )
+    if not csv_file:
+        return
+    try:
+        df = pd.read_json(json_file)
+        df.to_csv(csv_file, index=False)
+        messagebox.showinfo("Success", "JSON successfully converted to CSV!")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error: {str(e)}")
+
+def bz2_json_to_csv():
+    bz2_file = filedialog.askopenfilename(
+        title="Select BZ2 JSON File", filetypes=(("BZ2 Files", "*.bz2"),)
+    )
+    if not bz2_file:
+        return
+    csv_file = filedialog.asksaveasfilename(
+        title="Save CSV File", defaultextension=".csv", filetypes=(("CSV Files", "*.csv"),)
+    )
+    if not csv_file:
+        return
+    try:
+        with bz2.open(bz2_file, 'rt', encoding='utf-8') as f:
+            data = json.load(f)
+        df = pd.DataFrame(data)
+        df.to_csv(csv_file, index=False)
+        messagebox.showinfo("Success", "BZ2 JSON successfully converted to CSV!")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error: {str(e)}")
+
+def zip_json_to_csv():
+    zip_file_path = filedialog.askopenfilename(
+        title="Select ZIP File", filetypes=(("ZIP Files", "*.zip"),)
+    )
+    if not zip_file_path:
+        return
+    output_dir = filedialog.askdirectory(title="Select Output Directory")
+    if not output_dir:
+        return
+    try:
+        with zipfile.ZipFile(zip_file_path, 'r') as zipf:
+            # Filter to only JSON files in the ZIP archive
+            json_files = [info for info in zipf.infolist() if info.filename.endswith('.json')]
+            if not json_files:
+                messagebox.showinfo("No JSON files", "No JSON files found in the ZIP archive.")
+                return
+            for info in json_files:
+                with zipf.open(info) as file_obj:
+                    try:
+                        data = json.load(file_obj)
+                    except Exception as e:
+                        messagebox.showerror("Error", f"Error reading JSON from {info.filename}: {e}")
+                        continue
+                    df = pd.DataFrame(data)
+                    base_name = os.path.basename(info.filename)
+                    csv_file_name = os.path.splitext(base_name)[0] + ".csv"
+                    output_path = os.path.join(output_dir, csv_file_name)
+                    df.to_csv(output_path, index=False)
+            messagebox.showinfo("Success", "ZIP file processed successfully!")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error processing ZIP file: {str(e)}")
+
+def process_folder_to_csv():
+    folder_path = filedialog.askdirectory(title="Select Folder to Process")
+    if not folder_path:
+        return
+    output_dir = filedialog.askdirectory(title="Select Output Directory for CSV Files")
+    if not output_dir:
         return
 
-    # Retrieve user-specified options
-    sep = sep_entry.get() or ','
-    encoding = encoding_entry.get() or 'utf-8'
-    
-    header_input = header_entry.get().strip()
-    header_value = 'infer' if header_input == "" else None
-    if header_value is None:
-        try:
-            header_value = int(header_input)
-        except ValueError:
-            messagebox.showerror("Error", "Header must be an integer (or left empty to infer).")
-            return
+    processed_files = 0
+    error_files = 0
 
-    skiprows = skiprows_entry.get().strip()
-    if skiprows:
-        try:
-            # Allow a comma-separated list of rows or a single integer
-            if ',' in skiprows:
-                skiprows_value = [int(r.strip()) for r in skiprows.split(',')]
-            else:
-                skiprows_value = int(skiprows)
-        except ValueError:
-            messagebox.showerror("Error", "Skip rows must be an integer or a comma-separated list of integers.")
-            return
-    else:
-        skiprows_value = None
+    # Iterate over all items in the selected folder
+    for filename in os.listdir(folder_path):
+        full_path = os.path.join(folder_path, filename)
+        if os.path.isfile(full_path):
+            ext = os.path.splitext(filename)[1].lower()
+            try:
+                if ext == ".json":
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    df = pd.DataFrame(data)
+                    out_file = os.path.join(output_dir, os.path.splitext(filename)[0] + ".csv")
+                    df.to_csv(out_file, index=False)
+                    processed_files += 1
+                elif ext == ".bz2":
+                    with bz2.open(full_path, 'rt', encoding='utf-8') as f:
+                        data = json.load(f)
+                    df = pd.DataFrame(data)
+                    out_file = os.path.join(output_dir, os.path.splitext(filename)[0] + ".csv")
+                    df.to_csv(out_file, index=False)
+                    processed_files += 1
+                elif ext == ".zip":
+                    with zipfile.ZipFile(full_path, 'r') as zipf:
+                        json_files = [info for info in zipf.infolist() if info.filename.endswith('.json')]
+                        for info in json_files:
+                            with zipf.open(info) as file_obj:
+                                data = json.load(file_obj)
+                            df = pd.DataFrame(data)
+                            base_name = os.path.basename(info.filename)
+                            csv_file_name = os.path.splitext(base_name)[0] + ".csv"
+                            out_file = os.path.join(output_dir, csv_file_name)
+                            df.to_csv(out_file, index=False)
+                            processed_files += 1
+            except Exception as e:
+                error_files += 1
 
-    index_col = index_col_entry.get().strip() or None
-    if index_col:
-        try:
-            index_col = int(index_col)
-        except ValueError:
-            # Alternatively, the user might want to specify a column name
-            pass
+    messagebox.showinfo("Processing Completed", 
+                        f"Processed {processed_files} files.\nErrors in {error_files} files.")
 
-    usecols = usecols_entry.get().strip() or None
-    if usecols:
-        try:
-            # Assume comma-separated column names or indices
-            usecols = [col.strip() for col in usecols.split(',')]
-        except Exception as e:
-            messagebox.showerror("Error", f"Error processing usecols: {str(e)}")
-            return
+# ---------- Windows for Each Functionality ----------
 
-    na_values = na_values_entry.get().strip() or None
-    if na_values:
-        na_values = [val.strip() for val in na_values.split(',')]
+def open_csv_to_json_window():
+    window = tk.Toplevel(root)
+    window.title("CSV to JSON Converter")
+    window.geometry("400x200")
+    tk.Label(window, text="Convert CSV to JSON", font=("Arial", 12)).pack(pady=10)
+    tk.Button(window, text="Select CSV and Convert", command=csv_to_json).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
 
-    try:
-        # Read CSV using the specified options
-        df = pd.read_csv(
-            csv_file_path,
-            sep=sep,
-            encoding=encoding,
-            header=header_value,
-            skiprows=skiprows_value,
-            index_col=index_col,
-            usecols=usecols,
-            na_values=na_values,
-            skipinitialspace=True
-        )
-        # Convert DataFrame to JSON and save it
-        df.to_json(json_file_path, orient='records', indent=4)
-        messagebox.showinfo("Success", "CSV converted to JSON successfully!")
-    except Exception as e:
-        messagebox.showerror("Error", f"An error occurred: {str(e)}")
+def open_json_to_csv_window():
+    window = tk.Toplevel(root)
+    window.title("JSON to CSV Converter")
+    window.geometry("400x200")
+    tk.Label(window, text="Convert JSON to CSV", font=("Arial", 12)).pack(pady=10)
+    tk.Button(window, text="Select JSON and Convert", command=json_to_csv).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
 
-# Set up the main Tkinter window
+def open_bz2_json_to_csv_window():
+    window = tk.Toplevel(root)
+    window.title("BZ2 JSON to CSV Converter")
+    window.geometry("400x200")
+    tk.Label(window, text="Convert BZ2-compressed JSON to CSV", font=("Arial", 12)).pack(pady=10)
+    tk.Button(window, text="Select BZ2 JSON and Convert", command=bz2_json_to_csv).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+
+def open_zip_json_to_csv_window():
+    window = tk.Toplevel(root)
+    window.title("ZIP JSON to CSV Converter")
+    window.geometry("400x200")
+    tk.Label(window, text="Convert JSON inside ZIP to CSV", font=("Arial", 12)).pack(pady=10)
+    tk.Button(window, text="Select ZIP and Convert", command=zip_json_to_csv).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+
+def open_process_folder_window():
+    window = tk.Toplevel(root)
+    window.title("Process Folder to CSV")
+    window.geometry("400x200")
+    tk.Label(window, text="Process Folder: Convert JSON, BZ2, or ZIP files to CSV", font=("Arial", 12)).pack(pady=10)
+    tk.Button(window, text="Select Folder and Process", command=process_folder_to_csv).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+
+# ---------- Home Page Panel ----------
+
 root = tk.Tk()
-root.title("CSV to JSON Converter with Pandas Options")
-root.geometry("400x450")
+root.title("Data Converter Home")
+root.geometry("350x350")
 
-# Create labels and entry fields for additional options
-tk.Label(root, text="Separator (default: ,):").pack(pady=(5, 0))
-sep_entry = tk.Entry(root)
-sep_entry.pack()
+tk.Label(root, text="Select a Conversion Option:", font=("Arial", 14)).pack(pady=10)
 
-tk.Label(root, text="Encoding (default: utf-8):").pack(pady=(5, 0))
-encoding_entry = tk.Entry(root)
-encoding_entry.pack()
-
-tk.Label(root, text="Header row index (empty to infer):").pack(pady=(5, 0))
-header_entry = tk.Entry(root)
-header_entry.pack()
-
-tk.Label(root, text="Skip rows (int or comma-separated list):").pack(pady=(5, 0))
-skiprows_entry = tk.Entry(root)
-skiprows_entry.pack()
-
-tk.Label(root, text="Index column (number or name):").pack(pady=(5, 0))
-index_col_entry = tk.Entry(root)
-index_col_entry.pack()
-
-tk.Label(root, text="Use columns (comma-separated list):").pack(pady=(5, 0))
-usecols_entry = tk.Entry(root)
-usecols_entry.pack()
-
-tk.Label(root, text="NA values (comma-separated list):").pack(pady=(5, 0))
-na_values_entry = tk.Entry(root)
-na_values_entry.pack()
-
-tk.Button(root, text="Convert CSV to JSON", command=convert_csv_to_json).pack(pady=20)
+tk.Button(root, text="CSV to JSON", width=25, command=open_csv_to_json_window).pack(pady=5)
+tk.Button(root, text="JSON to CSV", width=25, command=open_json_to_csv_window).pack(pady=5)
+tk.Button(root, text="BZ2 JSON to CSV", width=25, command=open_bz2_json_to_csv_window).pack(pady=5)
+tk.Button(root, text="ZIP JSON to CSV", width=25, command=open_zip_json_to_csv_window).pack(pady=5)
+tk.Button(root, text="Process Folder to CSV", width=25, command=open_process_folder_window).pack(pady=5)
 
 root.mainloop()
-```
