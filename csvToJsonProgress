@@ -1,0 +1,277 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+import pandas as pd
+import json
+import bz2
+import zipfile
+import os
+
+# ---------- Helper Functions ----------
+
+def load_json_from_text(text):
+    """
+    Attempt to parse text as JSON. If that fails (because the file might be NDJSON),
+    parse each line as a JSON object and return a list of objects.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        data = []
+        for line in text.splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    data.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        if not data:
+            raise e
+        return data
+
+def get_output_filename(input_file, extension, manual):
+    """
+    If manual is True, open a Save dialog so the user can specify an output file.
+    Otherwise, automatically derive the output file name from the input file path.
+    """
+    if manual:
+        return filedialog.asksaveasfilename(
+            title=f"Save {extension.upper()} File",
+            defaultextension=extension,
+            filetypes=((f"{extension.upper()} Files", f"*{extension}"),)
+        )
+    else:
+        base, _ = os.path.splitext(input_file)
+        return base + extension
+
+# ---------- Conversion Functions ----------
+
+def csv_to_json(manual=False):
+    csv_file = filedialog.askopenfilename(
+        title="Select CSV File", filetypes=(("CSV Files", "*.csv"),)
+    )
+    if not csv_file:
+        return
+    json_file = get_output_filename(csv_file, ".json", manual)
+    if not json_file:
+        return
+    try:
+        df = pd.read_csv(csv_file)
+        df.to_json(json_file, orient='records', indent=4)
+        messagebox.showinfo("Success", f"CSV successfully converted to JSON!\nSaved as:\n{json_file}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error: {str(e)}")
+
+def json_to_csv(manual=False):
+    json_file = filedialog.askopenfilename(
+        title="Select JSON File", filetypes=(("JSON Files", "*.json"),)
+    )
+    if not json_file:
+        return
+    csv_file = get_output_filename(json_file, ".csv", manual)
+    if not csv_file:
+        return
+    try:
+        with open(json_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        data = load_json_from_text(content)
+        df = pd.DataFrame(data)
+        df.to_csv(csv_file, index=False)
+        messagebox.showinfo("Success", f"JSON successfully converted to CSV!\nSaved as:\n{csv_file}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error: {str(e)}")
+
+def bz2_json_to_csv(manual=False):
+    bz2_file = filedialog.askopenfilename(
+        title="Select BZ2 JSON File", filetypes=(("BZ2 Files", "*.bz2"),)
+    )
+    if not bz2_file:
+        return
+    csv_file = get_output_filename(bz2_file, ".csv", manual)
+    if not csv_file:
+        return
+    try:
+        with bz2.open(bz2_file, 'rt', encoding='utf-8') as f:
+            content = f.read()
+        data = load_json_from_text(content)
+        df = pd.DataFrame(data)
+        df.to_csv(csv_file, index=False)
+        messagebox.showinfo("Success", f"BZ2 JSON successfully converted to CSV!\nSaved as:\n{csv_file}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error: {str(e)}")
+
+def zip_json_to_csv():
+    zip_file_path = filedialog.askopenfilename(
+        title="Select ZIP File", filetypes=(("ZIP Files", "*.zip"),)
+    )
+    if not zip_file_path:
+        return
+    output_dir = filedialog.askdirectory(title="Select Output Directory")
+    if not output_dir:
+        return
+    try:
+        with zipfile.ZipFile(zip_file_path, 'r') as zipf:
+            json_files = [info for info in zipf.infolist() if info.filename.endswith('.json')]
+            if not json_files:
+                messagebox.showinfo("No JSON files", "No JSON files found in the ZIP archive.")
+                return
+            for info in json_files:
+                with zipf.open(info) as file_obj:
+                    content = file_obj.read().decode('utf-8')
+                    data = load_json_from_text(content)
+                df = pd.DataFrame(data)
+                base_name = os.path.basename(info.filename)
+                csv_file_name = os.path.splitext(base_name)[0] + ".csv"
+                output_path = os.path.join(output_dir, csv_file_name)
+                df.to_csv(output_path, index=False)
+            messagebox.showinfo("Success", "ZIP file processed successfully!")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error processing ZIP file: {str(e)}")
+
+def process_folder_to_csv():
+    folder_path = filedialog.askdirectory(title="Select Folder to Process")
+    if not folder_path:
+        return
+    output_dir = filedialog.askdirectory(title="Select Output Directory for CSV Files")
+    if not output_dir:
+        return
+
+    # Determine total conversions to process.
+    total_count = 0
+    file_list = os.listdir(folder_path)
+    for filename in file_list:
+        full_path = os.path.join(folder_path, filename)
+        if os.path.isfile(full_path):
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in [".json", ".bz2"]:
+                total_count += 1
+            elif ext == ".zip":
+                try:
+                    with zipfile.ZipFile(full_path, 'r') as zipf:
+                        json_files = [info for info in zipf.infolist() if info.filename.endswith('.json')]
+                        total_count += len(json_files)
+                except Exception:
+                    pass
+
+    # Create a progress window.
+    progress_window = tk.Toplevel(root)
+    progress_window.title("Processing Progress")
+    tk.Label(progress_window, text="Processing files...").pack(pady=10)
+    progress_bar = ttk.Progressbar(progress_window, maximum=total_count, mode='determinate', length=300)
+    progress_bar.pack(pady=10)
+    progress_window.update_idletasks()
+
+    processed_files = 0
+    error_files = 0
+
+    for filename in file_list:
+        full_path = os.path.join(folder_path, filename)
+        if os.path.isfile(full_path):
+            ext = os.path.splitext(filename)[1].lower()
+            try:
+                if ext == ".json":
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    data = load_json_from_text(content)
+                    df = pd.DataFrame(data)
+                    out_file = os.path.join(output_dir, os.path.splitext(filename)[0] + ".csv")
+                    df.to_csv(out_file, index=False)
+                    processed_files += 1
+                    progress_bar['value'] += 1
+                    progress_window.update_idletasks()
+                elif ext == ".bz2":
+                    with bz2.open(full_path, 'rt', encoding='utf-8') as f:
+                        content = f.read()
+                    data = load_json_from_text(content)
+                    df = pd.DataFrame(data)
+                    out_file = os.path.join(output_dir, os.path.splitext(filename)[0] + ".csv")
+                    df.to_csv(out_file, index=False)
+                    processed_files += 1
+                    progress_bar['value'] += 1
+                    progress_window.update_idletasks()
+                elif ext == ".zip":
+                    with zipfile.ZipFile(full_path, 'r') as zipf:
+                        json_files = [info for info in zipf.infolist() if info.filename.endswith('.json')]
+                        for info in json_files:
+                            with zipf.open(info) as file_obj:
+                                content = file_obj.read().decode('utf-8')
+                                data = load_json_from_text(content)
+                            df = pd.DataFrame(data)
+                            base_name = os.path.basename(info.filename)
+                            csv_file_name = os.path.splitext(base_name)[0] + ".csv"
+                            out_file = os.path.join(output_dir, csv_file_name)
+                            df.to_csv(out_file, index=False)
+                            processed_files += 1
+                            progress_bar['value'] += 1
+                            progress_window.update_idletasks()
+            except Exception as e:
+                error_files += 1
+                progress_bar['value'] += 1
+                progress_window.update_idletasks()
+
+    progress_window.destroy()
+    messagebox.showinfo("Processing Completed", 
+                        f"Processed {processed_files} files.\nErrors in {error_files} files.")
+
+# ---------- Windows for Each Functionality ----------
+
+def open_csv_to_json_window():
+    window = tk.Toplevel(root)
+    window.title("CSV to JSON Converter")
+    window.geometry("400x250")
+    tk.Label(window, text="Convert CSV to JSON", font=("Arial", 12)).pack(pady=10)
+    manual_output = tk.BooleanVar()
+    chk_manual = tk.Checkbutton(window, text="Manually specify output file", variable=manual_output)
+    chk_manual.pack(pady=5)
+    tk.Button(window, text="Select CSV and Convert", command=lambda: csv_to_json(manual_output.get())).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+
+def open_json_to_csv_window():
+    window = tk.Toplevel(root)
+    window.title("JSON to CSV Converter")
+    window.geometry("400x250")
+    tk.Label(window, text="Convert JSON to CSV", font=("Arial", 12)).pack(pady=10)
+    manual_output = tk.BooleanVar()
+    chk_manual = tk.Checkbutton(window, text="Manually specify output file", variable=manual_output)
+    chk_manual.pack(pady=5)
+    tk.Button(window, text="Select JSON and Convert", command=lambda: json_to_csv(manual_output.get())).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+
+def open_bz2_json_to_csv_window():
+    window = tk.Toplevel(root)
+    window.title("BZ2 JSON to CSV Converter")
+    window.geometry("400x250")
+    tk.Label(window, text="Convert BZ2-compressed JSON to CSV", font=("Arial", 12)).pack(pady=10)
+    manual_output = tk.BooleanVar()
+    chk_manual = tk.Checkbutton(window, text="Manually specify output file", variable=manual_output)
+    chk_manual.pack(pady=5)
+    tk.Button(window, text="Select BZ2 JSON and Convert", command=lambda: bz2_json_to_csv(manual_output.get())).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+
+def open_zip_json_to_csv_window():
+    window = tk.Toplevel(root)
+    window.title("ZIP JSON to CSV Converter")
+    window.geometry("400x200")
+    tk.Label(window, text="Convert JSON inside ZIP to CSV", font=("Arial", 12)).pack(pady=10)
+    tk.Button(window, text="Select ZIP and Convert", command=zip_json_to_csv).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+
+def open_process_folder_window():
+    window = tk.Toplevel(root)
+    window.title("Process Folder to CSV")
+    window.geometry("400x200")
+    tk.Label(window, text="Process Folder: Convert JSON, BZ2, or ZIP files to CSV", font=("Arial", 12)).pack(pady=10)
+    tk.Button(window, text="Select Folder and Process", command=process_folder_to_csv).pack(pady=20)
+    tk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+
+# ---------- Home Page Panel ----------
+
+root = tk.Tk()
+root.title("Data Converter Home")
+root.geometry("350x400")
+tk.Label(root, text="Select a Conversion Option:", font=("Arial", 14)).pack(pady=10)
+tk.Button(root, text="CSV to JSON", width=25, command=open_csv_to_json_window).pack(pady=5)
+tk.Button(root, text="JSON to CSV", width=25, command=open_json_to_csv_window).pack(pady=5)
+tk.Button(root, text="BZ2 JSON to CSV", width=25, command=open_bz2_json_to_csv_window).pack(pady=5)
+tk.Button(root, text="ZIP JSON to CSV", width=25, command=open_zip_json_to_csv_window).pack(pady=5)
+tk.Button(root, text="Process Folder to CSV", width=25, command=open_process_folder_window).pack(pady=5)
+root.mainloop()
