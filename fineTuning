@@ -1,0 +1,124 @@
+import pandas as pd
+import json
+from sentence_transformers import SentenceTransformer
+import subprocess
+
+# Configuration
+DATA_FILE = 'classified_data.csv'         # CSV file with your classified data (trade ID, pair ID, 100+ columns)
+TRAIN_DATA_FILE = 'training_data.json'       # JSON file to store training data with embeddings
+MODEL_NAME = 'gemma-3'                       # The Ollama model to be fine-tuned
+
+def preprocess_row(row):
+    """
+    Convert a row into a single string that represents all its information.
+    This concatenates each column name and value (including text, numbers, dates).
+    """
+    parts = []
+    for col, value in row.items():
+        parts.append(f"{col}: {value}")
+    return "\n".join(parts)
+
+def prepare_training_data(df, embedder):
+    """
+    For each record in the dataframe, generate a textual representation,
+    compute its embedding, and return a list of dictionaries containing the original
+    data plus the embedding and the text representation.
+    """
+    training_records = []
+    for _, row in df.iterrows():
+        # Convert row to a unified text representation
+        text_repr = preprocess_row(row)
+        # Compute embedding from the text representation
+        embedding = embedder.encode(text_repr, convert_to_numpy=True).tolist()
+        # Build a record with original data, text representation, and its embedding
+        record = row.to_dict()
+        record['text_representation'] = text_repr
+        record['embedding'] = embedding
+        training_records.append(record)
+    return training_records
+
+if __name__ == '__main__':
+    # Step 1: Load your classified CSV data
+    print("Loading CSV data...")
+    df = pd.read_csv(DATA_FILE)
+    print(f"Loaded {len(df)} records from {DATA_FILE}")
+
+    # Step 2: Prepare the training data by creating a text representation and computing embeddings
+    print("Loading SentenceTransformer embedding model...")
+    embedder = SentenceTransformer('all-MiniLM-L6-v2')
+    print("Creating training records with embeddings...")
+    training_records = prepare_training_data(df, embedder)
+
+    # Save the training data to a JSON file
+    with open(TRAIN_DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(training_records, f, ensure_ascii=False, indent=2)
+    print(f"Training data saved to {TRAIN_DATA_FILE}")
+
+    # Step 3: Download the Gemma 3 model via Ollama CLI (if not already downloaded)
+    print(f"Downloading model '{MODEL_NAME}' using Ollama CLI...")
+    subprocess.run(["ollama", "pull", MODEL_NAME], check=True)
+    print(f"Model '{MODEL_NAME}' downloaded successfully.")
+
+    # Step 4: Initiate fine-tuning of the Gemma 3 model using the prepared training data
+    print(f"Initiating fine-tuning for model '{MODEL_NAME}' with training data from '{TRAIN_DATA_FILE}'...")
+    subprocess.run(["ollama", "fine-tune", MODEL_NAME, "--data", TRAIN_DATA_FILE], check=True)
+    print("Fine-tuning initiated successfully.")
+
+
+-------------------------------------------------------------------------------------
+
+
+import subprocess
+import json
+
+# Define the fine-tuned model name (should match the one you used for fine-tuning)
+MODEL_NAME = 'gemma-3'
+
+def query_model(prompt):
+    """
+    Query the fine-tuned Gemma 3 model with a prompt.
+    The prompt should include the relevant data for the canceled transaction.
+    """
+    try:
+        # Call the model via the Ollama CLI with the provided prompt
+        output = subprocess.check_output(
+            ["ollama", "run", MODEL_NAME, "--prompt", prompt],
+            universal_newlines=True
+        )
+        # Parse the output which is expected to be in JSON format
+        response = json.loads(output)
+        return response
+    except Exception as e:
+        print("Error querying model:", e)
+        return None
+
+if __name__ == '__main__':
+    # Example: details for a canceled transaction.
+    # In practice, you can generate this string based on your data.
+    canceled_transaction_data = (
+        "trade_id: 12345\n"
+        "pair_id: A1B2C3\n"
+        "date: 2023-03-15\n"
+        "amount: 1000\n"
+        "instrument: XYZ\n"
+        "status: canceled\n"
+        "other_info: Some additional details about the trade."
+    )
+    
+    # Construct a prompt that instructs the model to predict the replacement trade
+    # and provide an explanation.
+    prompt = (
+        "Below is the data for a canceled transaction:\n"
+        f"{canceled_transaction_data}\n\n"
+        "Based on this data, predict the corresponding replacement trade (remolazo) "
+        "and provide a detailed explanation of your reasoning. Please output your answer in JSON format "
+        "with the keys 'remolazo_transaction' and 'explanation'."
+    )
+    
+    # Query the fine-tuned model
+    result = query_model(prompt)
+    
+    if result:
+        print("Model Prediction:")
+        print("Replacement Trade:", result.get("remolazo_transaction", ""))
+        print("Explanation:", result.get("explanation", ""))
