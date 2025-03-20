@@ -1,0 +1,61 @@
+flowchart LR
+    A[Start: Load Classified CSV Data\n(Trade ID, Pair ID, 100+ Columns)] --> B[Data Preprocessing & Validation\n(Convert rows to text & compute embeddings)]
+    B --> C[Split Data into Training & Evaluation Sets]
+    C --> D[Create Training Embedding File from Training Set]
+    D --> E[Download Gemma 3 Model via Ollama CLI]
+    E --> F[Fine-Tune Gemma 3 Model with Training Data]
+    F --> G[Evaluate Fine-Tuned Model on Evaluation Set]
+    G --> H{Is Accuracy Acceptable?}
+    H -- No --> I[Iterate Fine-Tuning & Evaluation]
+    H -- Yes --> J[Deploy Fine-Tuned Model on Raw Data]
+    J --> K[Generate Embeddings for Raw Data]
+    K --> L[Use FAISS KNN to Retrieve Candidate Trades]
+    L --> M[Run Fine-Tuned Model on Candidate Trades]
+    M --> N[Obtain Prediction and Explanation]
+    N --> O[Output Trade ID with Predicted Replacement & Reason]
+    O --> P[End]
+
+
+sequenceDiagram
+    participant U as User
+    participant CSV as CSV Data
+    participant PP as Preprocessing Module
+    participant ES as Embedding Service
+    participant CLI as Ollama CLI (Gemma 3)
+    participant FAISS as FAISS Vector DB
+    participant EV as Evaluation Module
+    participant OUT as Output
+
+    U->>CSV: Request load classified data
+    CSV-->>PP: Provide raw data (Trade ID, Pair ID, 100+ Columns)
+    PP->>PP: Validate & preprocess data
+    PP->>ES: Convert each record to text & compute embeddings
+    ES-->>PP: Return embeddings
+    PP->>PP: Split data into training & evaluation sets
+    PP->>U: Save training embedding file (JSON)
+
+    U->>CLI: Command: Download Gemma 3 Model
+    CLI-->>U: Confirm model downloaded
+    U->>CLI: Command: Fine-tune model with training data
+    CLI-->>U: Fine-tuning initiated
+
+    EV->>CSV: Load evaluation set
+    EV->>ES: Generate text and embeddings for evaluation records
+    EV->>CLI: Send prompt for prediction (with evaluation record)
+    CLI-->>EV: Return prediction and explanation
+    EV->>EV: Compare prediction with ground truth
+    EV->>U: Report evaluation metrics
+
+    alt Accuracy Not Acceptable
+      U->>CLI: Iterate fine-tuning with updated data
+    else Accuracy Acceptable
+      U->>CSV: Load raw unclassified data
+      CSV-->>PP: Provide raw data
+      PP->>ES: Generate embeddings for raw data
+      ES-->>PP: Return embeddings
+      PP->>FAISS: Index raw data embeddings & perform KNN search
+      FAISS-->>PP: Return candidate trades
+      PP->>CLI: Run fine-tuned model on candidates
+      CLI-->>PP: Return predictions & explanations
+      PP->>OUT: Output final trade ID predictions with explanations
+    end
