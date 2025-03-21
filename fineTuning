@@ -1,124 +1,217 @@
 import pandas as pd
 import json
-from sentence_transformers import SentenceTransformer
 import subprocess
+from sklearn.model_selection import train_test_split
 
-# Configuration
-DATA_FILE = 'classified_data.csv'         # CSV file with your classified data (trade ID, pair ID, 100+ columns)
-TRAIN_DATA_FILE = 'training_data.json'       # JSON file to store training data with embeddings
-MODEL_NAME = 'gemma-3'                       # The Ollama model to be fine-tuned
+# -------------------------
+# Configuration Parameters
+# -------------------------
+DATA_FILE = 'classified_data.csv'          # CSV file with classified trade data
+TRAIN_DATA_FILE = 'training_data.json'       # JSON file for training data (with embeddings)
+EVAL_DATA_FILE = 'evaluation_data.json'      # JSON file for evaluation data (without pair_id)
+EVAL_RESULTS_FILE = 'evaluation_results.csv'  # CSV file to store evaluation results
 
-def preprocess_row(row):
+ORIG_MODEL = 'gemma-3'                       # Original model name (before fine-tuning)
+FT_MODEL = 'gemma-3-ft'                      # Fine-tuned model name (with "ft" suffix)
+EMBEDDING_MODEL = 'all-minilm:l6-v2'         # Embedding model pulled via Ollama
+
+# Specify which columns to include when creating the text representation.
+# For training, we include 'pair_id' so the model learns the relationship.
+# Also assume that the CSV has a column 'replacement_trade_id' for the expected replacement.
+EMBEDDING_COLUMNS = ['column1', 'column2', 'column3', 'pair_id', 'replacement_trade_id']
+# The trade ID column (which we want stored separately)
+TRADE_ID_COLUMN = 'trade_id'
+
+# For evaluation, exclude the pair_id so the model must rely on the remaining fields.
+EVAL_EMBEDDING_COLUMNS = [col for col in EMBEDDING_COLUMNS if col != 'pair_id']
+
+# -------------------------
+# Helper Functions
+# -------------------------
+def preprocess_row(row, columns_to_include=None):
     """
-    Convert a row into a single string that represents all its information.
-    This concatenates each column name and value (including text, numbers, dates).
+    Convert a row into a text representation by concatenating each column name and its value.
+    If columns_to_include is provided, only include those columns.
     """
     parts = []
-    for col, value in row.items():
-        parts.append(f"{col}: {value}")
+    if columns_to_include:
+        for col in columns_to_include:
+            if col in row:
+                parts.append(f"{col}: {row[col]}")
+    else:
+        for col, value in row.items():
+            parts.append(f"{col}: {value}")
     return "\n".join(parts)
 
-def prepare_training_data(df, embedder):
+def get_embedding_via_ollama(text):
     """
-    For each record in the dataframe, generate a textual representation,
-    compute its embedding, and return a list of dictionaries containing the original
-    data plus the embedding and the text representation.
+    Use the Ollama CLI to generate an embedding for the given text using the embedding model.
+    Command: ollama run all-minilm:l6-v2 --prompt "<text>"
+    Expects output in JSON format with a key "embedding".
     """
-    training_records = []
+    try:
+        result = subprocess.check_output(
+            ["ollama", "run", EMBEDDING_MODEL, "--prompt", text],
+            universal_newlines=True
+        )
+        try:
+            response = json.loads(result)
+            embedding = response.get("embedding")
+            if embedding is None:
+                print("Warning: 'embedding' key not found. Using raw response.")
+                embedding = response
+        except json.JSONDecodeError:
+            embedding = result.strip()
+        return embedding
+    except subprocess.CalledProcessError as e:
+        print("Error during embedding generation:", e)
+        return None
+
+def prepare_data(df, columns_to_include, trade_id_column):
+    """
+    For each record in the DataFrame, generate a text representation using the specified columns,
+    compute its embedding via the Ollama embedding model, and return a list of dictionaries.
+    Each dictionary includes:
+      - The original data.
+      - 'text_representation': the combined text.
+      - 'embedding': the computed embedding.
+      - 'trade_id': the unique trade identifier.
+    """
+    records = []
     for _, row in df.iterrows():
-        # Convert row to a unified text representation
-        text_repr = preprocess_row(row)
-        # Compute embedding from the text representation
-        embedding = embedder.encode(text_repr, convert_to_numpy=True).tolist()
-        # Build a record with original data, text representation, and its embedding
+        text_repr = preprocess_row(row, columns_to_include=columns_to_include)
+        embedding = get_embedding_via_ollama(text_repr)
         record = row.to_dict()
         record['text_representation'] = text_repr
         record['embedding'] = embedding
-        training_records.append(record)
-    return training_records
+        record['trade_id'] = record.get(trade_id_column)
+        records.append(record)
+    return records
 
-if __name__ == '__main__':
-    # Step 1: Load your classified CSV data
-    print("Loading CSV data...")
-    df = pd.read_csv(DATA_FILE)
-    print(f"Loaded {len(df)} records from {DATA_FILE}")
+def download_model(model_name):
+    """
+    Download the specified model using the Ollama CLI.
+    """
+    print(f"Downloading model '{model_name}' using Ollama CLI...")
+    subprocess.run(["ollama", "pull", model_name], check=True)
+    print(f"Model '{model_name}' downloaded successfully.")
 
-    # Step 2: Prepare the training data by creating a text representation and computing embeddings
-    print("Loading SentenceTransformer embedding model...")
-    embedder = SentenceTransformer('all-MiniLM-L6-v2')
-    print("Creating training records with embeddings...")
-    training_records = prepare_training_data(df, embedder)
-
-    # Save the training data to a JSON file
-    with open(TRAIN_DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(training_records, f, ensure_ascii=False, indent=2)
-    print(f"Training data saved to {TRAIN_DATA_FILE}")
-
-    # Step 3: Download the Gemma 3 model via Ollama CLI (if not already downloaded)
-    print(f"Downloading model '{MODEL_NAME}' using Ollama CLI...")
-    subprocess.run(["ollama", "pull", MODEL_NAME], check=True)
-    print(f"Model '{MODEL_NAME}' downloaded successfully.")
-
-    # Step 4: Initiate fine-tuning of the Gemma 3 model using the prepared training data
-    print(f"Initiating fine-tuning for model '{MODEL_NAME}' with training data from '{TRAIN_DATA_FILE}'...")
-    subprocess.run(["ollama", "fine-tune", MODEL_NAME, "--data", TRAIN_DATA_FILE], check=True)
+def fine_tune_model(original_model, training_data_file, fine_tuned_model):
+    """
+    Fine-tune the original model using the training data.
+    Command:
+      ollama fine-tune <original_model> --data <training_data_file> --output <fine_tuned_model>
+    """
+    print(f"Initiating fine-tuning for model '{original_model}' with training data from '{training_data_file}', output model: '{fine_tuned_model}'...")
+    subprocess.run(["ollama", "fine-tune", original_model, "--data", training_data_file, "--output", fine_tuned_model], check=True)
     print("Fine-tuning initiated successfully.")
 
-
--------------------------------------------------------------------------------------
-
-
-import subprocess
-import json
-
-# Define the fine-tuned model name (should match the one you used for fine-tuning)
-MODEL_NAME = 'gemma-3'
-
-def query_model(prompt):
+def query_model(prompt, model_name):
     """
-    Query the fine-tuned Gemma 3 model with a prompt.
-    The prompt should include the relevant data for the canceled transaction.
+    Query the specified model using the Ollama CLI.
+    Expects the response in JSON format.
     """
     try:
-        # Call the model via the Ollama CLI with the provided prompt
         output = subprocess.check_output(
-            ["ollama", "run", MODEL_NAME, "--prompt", prompt],
+            ["ollama", "run", model_name, "--prompt", prompt],
             universal_newlines=True
         )
-        # Parse the output which is expected to be in JSON format
-        response = json.loads(output)
-        return response
-    except Exception as e:
-        print("Error querying model:", e)
+        try:
+            response = json.loads(output)
+            return response
+        except json.JSONDecodeError:
+            return output.strip()
+    except subprocess.CalledProcessError as e:
+        print("Error querying the model:", e)
         return None
 
+def evaluate_model(evaluation_records, model_name, results_file):
+    """
+    Iterate over all evaluation records, query the fine-tuned model, and record:
+      - trade_id
+      - expected replacement_trade_id (from the evaluation record)
+      - predicted replacement_transaction (from model's response)
+      - explanation (from model's response)
+      - a correctness flag (1 if prediction matches expected, else 0)
+    Finally, save all results to a CSV file and print overall accuracy.
+    """
+    results = []
+    correct_count = 0
+    total = len(evaluation_records)
+    
+    for record in evaluation_records:
+        # Build a prompt using the text_representation from evaluation record
+        prompt = (
+            "Below is the data for a canceled trade (without the pair id):\n"
+            f"{record['text_representation']}\n\n"
+            "Based on this information, predict the replacement trade and provide a detailed explanation of your reasoning. "
+            "Output your answer in JSON format with keys 'replacement_transaction' and 'explanation'."
+        )
+        response = query_model(prompt, model_name)
+        
+        # Extract predicted trade and explanation; assume expected result is in 'replacement_trade_id'
+        predicted = ""
+        explanation = ""
+        if isinstance(response, dict):
+            predicted = response.get("replacement_transaction", "").strip()
+            explanation = response.get("explanation", "").strip()
+        else:
+            predicted = response
+        
+        expected = str(record.get("replacement_trade_id", "")).strip()
+        correct = 1 if predicted == expected else 0
+        correct_count += correct
+        
+        results.append({
+            "trade_id": record.get("trade_id", ""),
+            "expected_replacement_trade": expected,
+            "predicted_replacement_trade": predicted,
+            "explanation": explanation,
+            "correct": correct
+        })
+        print(f"Evaluated trade {record.get('trade_id', '')}: Expected '{expected}' | Predicted '{predicted}' | Correct: {correct}")
+    
+    accuracy = (correct_count / total) * 100 if total > 0 else 0
+    print(f"\nOverall Evaluation Accuracy: {accuracy:.2f}% ({correct_count}/{total})")
+    
+    # Save results to CSV
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(results_file, index=False)
+    print(f"Evaluation results saved to {results_file}")
+
+# -------------------------
+# Main Workflow
+# -------------------------
 if __name__ == '__main__':
-    # Example: details for a canceled transaction.
-    # In practice, you can generate this string based on your data.
-    canceled_transaction_data = (
-        "trade_id: 12345\n"
-        "pair_id: A1B2C3\n"
-        "date: 2023-03-15\n"
-        "amount: 1000\n"
-        "instrument: XYZ\n"
-        "status: canceled\n"
-        "other_info: Some additional details about the trade."
-    )
-    
-    # Construct a prompt that instructs the model to predict the replacement trade
-    # and provide an explanation.
-    prompt = (
-        "Below is the data for a canceled transaction:\n"
-        f"{canceled_transaction_data}\n\n"
-        "Based on this data, predict the corresponding replacement trade (remolazo) "
-        "and provide a detailed explanation of your reasoning. Please output your answer in JSON format "
-        "with the keys 'remolazo_transaction' and 'explanation'."
-    )
-    
-    # Query the fine-tuned model
-    result = query_model(prompt)
-    
-    if result:
-        print("Model Prediction:")
-        print("Replacement Trade:", result.get("remolazo_transaction", ""))
-        print("Explanation:", result.get("explanation", ""))
+    # Step 1: Load the classified CSV data
+    print("Loading CSV data...")
+    df = pd.read_csv(DATA_FILE)
+    print(f"Loaded {len(df)} records from {DATA_FILE}.")
+
+    # Step 2: Split the data into training and evaluation sets (e.g., 80% training, 20% evaluation)
+    train_df, eval_df = train_test_split(df, test_size=0.2, random_state=42)
+    print(f"Training set: {len(train_df)} records; Evaluation set: {len(eval_df)} records.")
+
+    # Step 3a: Prepare the training data (include all fields, including pair_id)
+    print("Preparing training data (including pair_id)...")
+    training_records = prepare_data(train_df, columns_to_include=EMBEDDING_COLUMNS, trade_id_column=TRADE_ID_COLUMN)
+    with open(TRAIN_DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(training_records, f, ensure_ascii=False, indent=2)
+    print(f"Training data saved to {TRAIN_DATA_FILE}.")
+
+    # Step 3b: Prepare the evaluation data (exclude pair_id so the model must rely on other fields)
+    print("Preparing evaluation data (excluding pair_id)...")
+    evaluation_records = prepare_data(eval_df, columns_to_include=EVAL_EMBEDDING_COLUMNS, trade_id_column=TRADE_ID_COLUMN)
+    with open(EVAL_DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(evaluation_records, f, ensure_ascii=False, indent=2)
+    print(f"Evaluation data saved to {EVAL_DATA_FILE}.")
+
+    # Step 4: Download the original model (if not already available)
+    download_model(ORIG_MODEL)
+
+    # Step 5: Fine-tune the original model using the training data, outputting a new fine-tuned model (FT_MODEL)
+    fine_tune_model(ORIG_MODEL, TRAIN_DATA_FILE, FT_MODEL)
+
+    # Step 6: Evaluate the fine-tuned model on all evaluation records and save results
+    print("Evaluating the fine-tuned model on the evaluation dataset...")
+    evaluate_model(evaluation_records, FT_MODEL, EVAL_RESULTS_FILE)
