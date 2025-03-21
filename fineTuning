@@ -1,29 +1,29 @@
 import pandas as pd
 import json
-import ollama  # Make sure to `pip install ollama`
-import subprocess
+import ollama  # pip install ollama
+import unsloth  # pip install unsloth
 from sklearn.model_selection import train_test_split
 
 # -------------------------
 # Configuration Parameters
 # -------------------------
-DATA_FILE = 'classified_data.csv'          # CSV file with classified trade data
+DATA_FILE = 'classified_data.csv'          # CSV with classified trade data
 TRAIN_DATA_FILE = 'training_data.json'       # JSON file for training data (with embeddings)
 EVAL_DATA_FILE = 'evaluation_data.json'      # JSON file for evaluation data (without pair_id)
-EVAL_RESULTS_FILE = 'evaluation_results.csv'  # CSV file to store evaluation results
+EVAL_RESULTS_FILE = 'evaluation_results.csv'  # CSV file for evaluation results
 
-ORIG_MODEL = 'gemma-3'                       # Original model name (before fine-tuning)
-FT_MODEL = 'gemma-3-ft'                      # Fine-tuned model name (with "ft" suffix)
+ORIG_MODEL = 'gemma-3'                       # Original model name before fine-tuning
+# When using Unsloth, fine-tuned models should be pushed under a user namespace.
+FT_MODEL = 'user/gemma-3-ft'                 # Fine-tuned model name (with "user/" prefix)
 EMBEDDING_MODEL = 'all-minilm:l6-v2'         # Embedding model pulled via Ollama
 
 # Specify which columns to include when creating the text representation.
 # For training we include 'pair_id' so the model learns the relationship.
-# (Assume the CSV has a column 'replacement_trade_id' for the expected replacement.)
+# Assume the CSV has a column 'replacement_trade_id' with the expected replacement.
 EMBEDDING_COLUMNS = ['column1', 'column2', 'column3', 'pair_id', 'replacement_trade_id']
-# The trade ID column (stored separately for reference)
-TRADE_ID_COLUMN = 'trade_id'
+TRADE_ID_COLUMN = 'trade_id'                 # Column with the unique trade identifier
 
-# For evaluation, exclude the pair_id so that the model must rely on the remaining fields.
+# For evaluation, exclude 'pair_id' so that the model must rely on other fields.
 EVAL_EMBEDDING_COLUMNS = [col for col in EMBEDDING_COLUMNS if col != 'pair_id']
 
 # -------------------------
@@ -48,7 +48,7 @@ def get_embedding_via_ollama(text):
     """
     Generate an embedding for the given text using the Ollama embed API.
     Calls: ollama.embed(model=EMBEDDING_MODEL, input=text)
-    Expects the response to be a dict with a key "embedding".
+    Expects a dict response with a key "embedding".
     """
     try:
         response = ollama.embed(model=EMBEDDING_MODEL, input=text)
@@ -64,11 +64,11 @@ def get_embedding_via_ollama(text):
 def prepare_data(df, columns_to_include, trade_id_column):
     """
     For each record in the DataFrame, generate a text representation using the specified columns,
-    compute its embedding via the Ollama embed API, and return a list of dictionaries.
+    compute its embedding via Ollama, and return a list of dictionaries.
     Each dictionary includes:
-      - The original data.
-      - 'text_representation': the combined text.
-      - 'embedding': the computed embedding.
+      - All original fields,
+      - 'text_representation': the combined text,
+      - 'embedding': the computed embedding,
       - 'trade_id': the unique trade identifier.
     """
     records = []
@@ -95,34 +95,39 @@ def download_model(model_name):
 
 def fine_tune_model(original_model, training_data_file, fine_tuned_model):
     """
-    Fine-tune the original model using the training data.
-    We use a subprocess call to execute:
-      ollama fine-tune <original_model> --data <training_data_file> --output <fine_tuned_model>
+    Fine-tune the original model using the training data via the Unsloth library.
+    According to the Unsloth tutorial, you can call:
+       unsloth.fine_tune(model=original_model, training_file=training_data_file, output_model=fine_tuned_model, ...)
+    Adjust additional parameters as needed.
     """
     try:
-        print(f"Initiating fine-tuning for model '{original_model}' with training data from '{training_data_file}', output model: '{fine_tuned_model}'...")
-        subprocess.run(["ollama", "fine-tune", original_model, "--data", training_data_file, "--output", fine_tuned_model], check=True)
-        print("Fine-tuning initiated successfully.")
+        print(f"Initiating fine-tuning using Unsloth for model '{original_model}' with training data from '{training_data_file}'.")
+        # The Unsloth API accepts the training file path and the desired output model name.
+        response = unsloth.fine_tune(
+            model=original_model,
+            training_file=training_data_file,
+            output_model=fine_tuned_model
+            # You can add additional hyperparameters here if needed.
+        )
+        print("Fine-tuning completed successfully. Response:", response)
     except Exception as e:
-        print("Error during fine-tuning:", e)
+        print("Error during fine-tuning with Unsloth:", e)
 
 def query_model(prompt, model_name):
     """
     Query the specified model using the Ollama chat API.
-    Constructs a chat message with the prompt and expects the model's response in JSON format.
+    Constructs a chat message with the prompt and expects a JSON response.
     """
     try:
         response = ollama.chat(
             model=model_name,
             messages=[{'role': 'user', 'content': prompt}]
         )
-        # Extract the content from the response message.
         text = response.message.content
         try:
             data = json.loads(text)
             return data
         except json.JSONDecodeError:
-            # If the response is not valid JSON, return the raw text.
             return text.strip()
     except Exception as e:
         print("Error querying the model:", e)
@@ -131,11 +136,11 @@ def query_model(prompt, model_name):
 def evaluate_model(evaluation_records, model_name, results_file):
     """
     Iterate over all evaluation records, query the fine-tuned model, and record:
-      - trade_id
-      - expected replacement_trade_id (from the evaluation record)
-      - predicted replacement_transaction (from model's response)
-      - explanation (from model's response)
-      - a correctness flag (1 if prediction matches expected, else 0)
+      - trade_id,
+      - expected replacement_trade_id (from the evaluation record),
+      - predicted replacement_transaction (from model's response),
+      - explanation (from model's response),
+      - a correctness flag (1 if prediction matches expected, else 0).
     Save all results to a CSV file and print overall accuracy.
     """
     results = []
@@ -206,12 +211,13 @@ if __name__ == '__main__':
         json.dump(evaluation_records, f, ensure_ascii=False, indent=2)
     print(f"Evaluation data saved to {EVAL_DATA_FILE}.")
 
-    # Step 4: Ensure the original model is available by pulling it
+    # Step 4: Ensure the original model is available by pulling it via Ollama
     download_model(ORIG_MODEL)
 
-    # Step 5: Fine-tune the original model using the training data, producing a new fine-tuned model (FT_MODEL)
+    # Step 5: Fine-tune the original model using the training data, producing a new fine-tuned model.
+    # The fine-tuned model will be available in Ollama under the name specified in FT_MODEL.
     fine_tune_model(ORIG_MODEL, TRAIN_DATA_FILE, FT_MODEL)
 
-    # Step 6: Evaluate the fine-tuned model on all evaluation records and save the detailed results
+    # Step 6: Evaluate the fine-tuned model on all evaluation records and save the detailed results.
     print("Evaluating the fine-tuned model on the evaluation dataset...")
     evaluate_model(evaluation_records, FT_MODEL, EVAL_RESULTS_FILE)
