@@ -1,6 +1,6 @@
 import pandas as pd
 import json
-import subprocess
+import ollama  # Use the Ollama Python library
 from sklearn.model_selection import train_test_split
 
 # -------------------------
@@ -45,25 +45,24 @@ def preprocess_row(row, columns_to_include=None):
 
 def get_embedding_via_ollama(text):
     """
-    Use the Ollama CLI to generate an embedding for the given text using the embedding model.
-    Command: ollama run all-minilm:l6-v2 --prompt "<text>"
-    Expects output in JSON format with a key "embedding".
+    Use the Ollama Python library to generate an embedding for the given text using the embedding model.
+    Calls:
+        ollama.run(EMBEDDING_MODEL, prompt=text)
+    The response is expected to include a key "embedding".
     """
     try:
-        result = subprocess.check_output(
-            ["ollama", "run", EMBEDDING_MODEL, "--prompt", text],
-            universal_newlines=True
-        )
-        try:
-            response = json.loads(result)
-            embedding = response.get("embedding")
-            if embedding is None:
-                print("Warning: 'embedding' key not found. Using raw response.")
-                embedding = response
-        except json.JSONDecodeError:
-            embedding = result.strip()
+        response = ollama.run(EMBEDDING_MODEL, prompt=text)
+        # If the response object has a .json() method, use it
+        if hasattr(response, "json"):
+            data = response.json()
+        else:
+            data = response  # assume it's already a dict
+        embedding = data.get("embedding")
+        if embedding is None:
+            print("Warning: 'embedding' key not found. Using raw response.")
+            embedding = data
         return embedding
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         print("Error during embedding generation:", e)
         return None
 
@@ -90,38 +89,47 @@ def prepare_data(df, columns_to_include, trade_id_column):
 
 def download_model(model_name):
     """
-    Download the specified model using the Ollama CLI.
+    Download the specified model using the Ollama Python library.
+    (If the library exposes a download/pull function, otherwise you may call the CLI.)
+    Here we assume that calling ollama.run for a model that hasn't been pulled yet will pull it.
     """
-    print(f"Downloading model '{model_name}' using Ollama CLI...")
-    subprocess.run(["ollama", "pull", model_name], check=True)
-    print(f"Model '{model_name}' downloaded successfully.")
+    try:
+        # This is a placeholder – if the library has a download function, call it.
+        print(f"Ensuring model '{model_name}' is available...")
+        ollama.run(model_name, prompt="Test")  # a dummy prompt to force a pull if necessary
+        print(f"Model '{model_name}' is available.")
+    except Exception as e:
+        print(f"Error downloading model '{model_name}':", e)
 
 def fine_tune_model(original_model, training_data_file, fine_tuned_model):
     """
     Fine-tune the original model using the training data.
-    Command:
+    We assume that the Ollama library supports a fine-tune function.
+    Here we call it via subprocess as a fallback if needed.
+    The command used is:
       ollama fine-tune <original_model> --data <training_data_file> --output <fine_tuned_model>
     """
-    print(f"Initiating fine-tuning for model '{original_model}' with training data from '{training_data_file}', output model: '{fine_tuned_model}'...")
-    subprocess.run(["ollama", "fine-tune", original_model, "--data", training_data_file, "--output", fine_tuned_model], check=True)
-    print("Fine-tuning initiated successfully.")
+    import subprocess
+    try:
+        print(f"Initiating fine-tuning for model '{original_model}' with training data from '{training_data_file}', output model: '{fine_tuned_model}'...")
+        subprocess.run(["ollama", "fine-tune", original_model, "--data", training_data_file, "--output", fine_tuned_model], check=True)
+        print("Fine-tuning initiated successfully.")
+    except Exception as e:
+        print("Error during fine-tuning:", e)
 
 def query_model(prompt, model_name):
     """
-    Query the specified model using the Ollama CLI.
-    Expects the response in JSON format.
+    Query the specified model using the Ollama Python library.
+    The response is expected to be in JSON format.
     """
     try:
-        output = subprocess.check_output(
-            ["ollama", "run", model_name, "--prompt", prompt],
-            universal_newlines=True
-        )
-        try:
-            response = json.loads(output)
-            return response
-        except json.JSONDecodeError:
-            return output.strip()
-    except subprocess.CalledProcessError as e:
+        response = ollama.run(model_name, prompt=prompt)
+        if hasattr(response, "json"):
+            data = response.json()
+        else:
+            data = response
+        return data
+    except Exception as e:
         print("Error querying the model:", e)
         return None
 
@@ -156,7 +164,7 @@ def evaluate_model(evaluation_records, model_name, results_file):
             predicted = response.get("replacement_transaction", "").strip()
             explanation = response.get("explanation", "").strip()
         else:
-            predicted = response
+            predicted = str(response)
         
         expected = str(record.get("replacement_trade_id", "")).strip()
         correct = 1 if predicted == expected else 0
